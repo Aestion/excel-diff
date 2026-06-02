@@ -1,0 +1,24 @@
+[package]
+name = "excel-diff"
+version = "0.1.0"
+edition = "2021"
+default-run = "excel-diff"
+
+[[bin]]
+name = "excel-diff"
+path = "src/main.rs"
+
+[[bin]]
+name = "excel-diff-cli"
+path = "src/cli.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+calamine = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

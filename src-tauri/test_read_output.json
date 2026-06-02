@@ -1,0 +1,841 @@
+{
+  "filePath": "E:\\ClaudeWork\\test1\\1.xlsx",
+  "sheets": [
+    {
+      "name": "Sheet1",
+      "columns": [
+        {
+          "index": 0,
+          "name": "ID",
+          "dataType": "mixed"
+        },
+        {
+          "index": 1,
+          "name": "�ֶ�1",
+          "dataType": "mixed"
+        },
+        {
+          "index": 2,
+          "name": "�ֶ�2",
+          "dataType": "mixed"
+        },
+        {
+          "index": 3,
+          "name": "�ֶ�3",
+          "dataType": "mixed"
+        },
+        {
+          "index": 4,
+          "name": "�ֶ�4",
+          "dataType": "mixed"
+        },
+        {
+          "index": 5,
+          "name": "�ֶ�5",
+          "dataType": "mixed"
+        },
+        {
+          "index": 6,
+          "name": "�ֶ�6",
+          "dataType": "mixed"
+        },
+        {
+          "index": 7,
+          "name": "Column 8",
+          "dataType": "mixed"
+        }
+      ],
+      "rows": [
+        [
+          {
+            "value": "ID",
+            "formula": null
+          },
+          {
+            "value": "�ֶ�1",
+            "formula": null
+          },
+          {
+            "value": "�ֶ�2",
+            "formula": null
+          },
+          {
+            "value": "�ֶ�3",
+            "formula": null
+          },
+          {
+            "value": "�ֶ�4",
+            "formula": null
+          },
+          {
+            "value": "�ֶ�5",
+            "formula": null
+          },
+          {
+            "value": "�ֶ�6",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 1,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 2,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "��",
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 3,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 4,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 5,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 6,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 7,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 8,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 9,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 10,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 11,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 12,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 13,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 14,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 15,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 16,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 17,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 18,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 19,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 20,
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": "A",
+            "formula": null
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ],
+        [
+          {
+            "value": 21,
+            "formula": null
+          },
+          {
+            "value": 6,
+            "formula": "=1+2+3"
+          },
+          {
+            "value": 6,
+            "formula": "=1+2+3"
+          },
+          {
+            "value": 37,
+            "formula": "=1+2+34"
+          },
+          {
+            "value": 37,
+            "formula": "=1+2+34"
+          },
+          {
+            "value": 37,
+            "formula": "=1+2+34"
+          },
+          {
+            "value": 37,
+            "formula": "=1+2+34"
+          },
+          {
+            "value": null,
+            "formula": null
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Sheet2",
+      "columns": [
+        {
+          "index": 0,
+          "name": "Column 1",
+          "dataType": "mixed"
+        }
+      ],
+      "rows": [
+        [
+          {
+            "value": null,
+            "formula": null
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Sheet3",
+      "columns": [
+        {
+          "index": 0,
+          "name": "Column 1",
+          "dataType": "mixed"
+        }
+      ],
+      "rows": [
+        [
+          {
+            "value": null,
+            "formula": null
+          }
+        ]
+      ]
+    }
+  ],
+  "sheetNames": [
+    "Sheet1",
+    "Sheet2",
+    "Sheet3"
+  ]
+}

@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Beyond Compare style colors */
+
+/* Added row: light green (BC: files only on right side) */
+.ag-theme-alpine .row-added {
+  background-color: #e6ffe6 !important;
+}
+
+/* Deleted row: light gray (BC: files only on left side) */
+.ag-theme-alpine .row-deleted {
+  background-color: #f0f0f0 !important;
+  color: #999;
+}
+
+/* Modified row: light red/pink (BC: files differ) */
+.ag-theme-alpine .row-modified {
+  background-color: #fff0f0 !important;
+}
+
+/* Cell-level highlight for modified cells */
+.ag-theme-alpine .cell-modified {
+  background-color: #ffcccc !important;
+  font-weight: 600;
+}
+
+/* Search match highlight */
+.ag-theme-alpine .cell-search-match {
+  background-color: #fffacd !important;
+}
+
+/* Current search match highlight */
+.ag-theme-alpine .cell-search-current {
+  background-color: #ffd700 !important;
+  font-weight: 700;
+}
+
+/* AG Grid theme adjustments */
+.ag-theme-alpine {
+  --ag-header-height: 28px;
+  --ag-header-background-color: #f5f5f5;
+  --ag-header-foreground-color: #555;
+  --ag-odd-row-background-color: transparent;
+  --ag-row-height: 26px;
+  --ag-font-size: 12px;
+  --ag-border-color: #e0e0e0;
+}
+
+/* Selected row highlight */
+.ag-theme-alpine .ag-row-selected {
+  background-color: #cce5ff !important;
+}
+
+/* Header checkbox */
+.ag-theme-alpine .ag-header-select-all {
+  margin: 0;
+}

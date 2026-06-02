@@ -1,0 +1,582 @@
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { useDiffStore } from "../stores/diffStore";
+import { readExcel, detectKeyColumns, writeExcel, listExcelFiles } from "../api/tauri";
+import { computeDiff } from "../utils/diffEngine";
+import type { FilePair } from "../types/excel";
+import { RefreshIcon, ArrowRight, ArrowLeft, SpinnerIcon, FolderIcon, ChevronDown } from "./Icons";
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatModifiedAt(timestamp?: number): string {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${month}-${day} ${hours}:${minutes}`;
+}
+
+function matchWildcard(text: string, pattern: string): boolean {
+  if (!pattern) return true;
+  const regexPattern = pattern
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\\\*/g, ".*")
+    .replace(/\\\?/g, ".");
+  const regex = new RegExp(`^${regexPattern}$`, "i");
+  return regex.test(text);
+}
+
+type FilterMode = "all" | "different" | "same" | "left-only" | "right-only";
+
+// Context menu
+interface ContextMenuState {
+  x: number;
+  y: number;
+  side: "left" | "right";
+  paths: string[];
+}
+
+function ContextMenu({ state, onAction, onClose }: {
+  state: ContextMenuState;
+  onAction: (action: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  const count = state.paths.length;
+  const isLeft = state.side === "left";
+
+  return (
+    <div ref={ref} className="fixed bg-white rounded-lg shadow-xl border py-1 z-50 min-w-[180px]"
+      style={{ left: state.x, top: state.y }}>
+      <div className="px-3 py-1.5 text-[11px] text-gray-400 border-b">
+        已选 {count} 个文件 · {isLeft ? "左侧" : "右侧"}
+      </div>
+      {isLeft ? (
+        <>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+            onClick={() => onAction("copy-left-to-right")}>
+            <ArrowRight size={14} className="text-blue-500" />
+            复制到右侧 ({count} 个文件)
+          </button>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+            onClick={() => onAction("open-diff")}>
+            打开对比
+          </button>
+        </>
+      ) : (
+        <>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-purple-50 flex items-center gap-2"
+            onClick={() => onAction("copy-right-to-left")}>
+            <ArrowLeft size={14} className="text-purple-500" />
+            复制到左侧 ({count} 个文件)
+          </button>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+            onClick={() => onAction("open-diff")}>
+            打开对比
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Collapsible folder group
+function FolderGroup({ dir, files, side, selected, onSelect, onDoubleClick, onContextMenu, collapsed, onToggle }: {
+  dir: string;
+  files: FilePair[];
+  side: "left" | "right";
+  selected: Set<string>;
+  onSelect: (path: string, e: React.MouseEvent) => void;
+  onDoubleClick: (pair: FilePair) => void;
+  onContextMenu: (e: React.MouseEvent, side: "left" | "right") => void;
+  collapsed: boolean;
+  onToggle: (dir: string) => void;
+}) {
+  const isRoot = dir === "";
+  const diffs = files.filter(f => f.diffStatus === "different").length;
+  const onlys = files.filter(f => f.status === "old-only" || f.status === "new-only").length;
+  const getSize = (p: FilePair) => side === "left" ? p.oldSize : p.newSize;
+  const getModifiedAt = (p: FilePair) => side === "left" ? p.oldModifiedAt : p.newModifiedAt;
+
+  return (
+    <div>
+      {!isRoot && (
+        <div className="flex items-center px-2 h-7 bg-gray-50 border-b cursor-pointer hover:bg-gray-100 select-none"
+          onClick={() => onToggle(dir)}>
+          <span className={`transform transition-transform ${collapsed ? "" : "rotate-90"}`}>
+            <ChevronDown size={12} className="text-gray-400" />
+          </span>
+          <FolderIcon size={13} className="text-amber-500 mx-1" />
+          <span className="text-xs font-medium text-gray-600 flex-1 truncate">{dir}</span>
+          <span className="text-[10px] text-gray-400 ml-2">
+            {files.length}文件
+            {diffs > 0 && <span className="text-red-500 ml-1">{diffs}不同</span>}
+            {onlys > 0 && <span className="text-gray-500 ml-1">{onlys}仅一侧</span>}
+          </span>
+        </div>
+      )}
+      {(!collapsed || isRoot) && files.map(pair => {
+        // Check if file exists on this side
+        const existsOnThisSide = side === "left"
+          ? pair.status !== "new-only"
+          : pair.status !== "old-only";
+
+        // If file doesn't exist on this side, show empty placeholder row
+        if (!existsOnThisSide) {
+          return (
+            <div key={`placeholder-${pair.relativePath}-${side}`}
+              className="flex items-center pl-8 pr-4 h-7 border-b bg-gray-100 text-xs">
+              <span className="w-3 mr-1"></span>
+              <span className="flex-1 font-mono truncate text-gray-300">{pair.filename}</span>
+              <span className="w-20 ml-2 shrink-0"></span>
+              <span className="w-16 ml-2 shrink-0"></span>
+            </div>
+          );
+        }
+
+        const isOnly = pair.status === "old-only" || pair.status === "new-only";
+        const isDiff = pair.diffStatus === "different";
+        const isUnknown = pair.diffStatus === "unknown";
+        const isSelected = selected.has(pair.relativePath);
+        const bg = isSelected
+          ? "bg-blue-100"
+          : isOnly
+            ? "bg-gray-200"
+            : isDiff
+              ? "bg-red-50"
+              : isUnknown
+                ? "bg-yellow-50"
+                : "bg-white";
+        const fileName = isRoot ? pair.relativePath : pair.relativePath.substring(dir.length + 1);
+        const modifiedAt = getModifiedAt(pair);
+
+        return (
+          <div key={pair.relativePath}
+            className={`flex items-center pl-8 pr-4 h-7 border-b cursor-pointer text-xs ${bg} hover:brightness-95`}
+            onClick={(e) => onSelect(pair.relativePath, e)}
+            onDoubleClick={() => onDoubleClick(pair)}
+            onContextMenu={(e) => onContextMenu(e, side)}>
+            <span className="w-3 mr-1">
+              {isSelected && <span className="text-blue-600">●</span>}
+            </span>
+            <span className="flex-1 font-mono truncate">{fileName}</span>
+            <span className="text-gray-400 ml-2 w-20 text-right shrink-0 font-mono">{formatModifiedAt(modifiedAt)}</span>
+            <span className="text-gray-400 ml-2 w-16 text-right shrink-0">{formatSize(getSize(pair))}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function FileList() {
+  const {
+    filePairs, oldDir, newDir,
+    setView, selectFilePair,
+    setOldWorkbook, setNewWorkbook, setCurrentSheet,
+    setDiffResult, setKeyColumnIndices,
+    verifyAllFiles,
+  } = useDiffStore();
+
+  const [merging, setMerging] = useState(false);
+  const [mergeProgress, setMergeProgress] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [filter, setFilter] = useState<FilterMode>("all");
+  const [filenameFilter, setFilenameFilter] = useState("");
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+
+  // Collect all unique folders (including nested parent folders)
+  const allFolders = useMemo(() => {
+    const folders = new Set<string>();
+    for (const pair of filePairs) {
+      let path = pair.relativePath;
+      let lastSlash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+      while (lastSlash > 0) {
+        const dir = path.substring(0, lastSlash);
+        folders.add(dir);
+        path = dir;
+        lastSlash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+      }
+    }
+    return folders;
+  }, [filePairs]);
+
+  // Initialize collapsed state when folders change - only add new folders as collapsed
+  useEffect(() => {
+    setCollapsedFolders((prev) => {
+      const next = new Set(prev);
+      for (const folder of allFolders) {
+        if (!prev.has(folder)) {
+          next.add(folder);
+        }
+      }
+      return next;
+    });
+  }, [allFolders]);
+
+  // Stats
+  const stats = useMemo(() => ({
+    total: filePairs.length,
+    identical: filePairs.filter(p => p.diffStatus === "identical").length,
+    different: filePairs.filter(p => p.diffStatus === "different").length,
+    unknown: filePairs.filter(p => p.diffStatus === "unknown").length,
+    oldOnly: filePairs.filter(p => p.status === "old-only").length,
+    newOnly: filePairs.filter(p => p.status === "new-only").length,
+  }), [filePairs]);
+
+  // Filtered
+  const filteredPairs = useMemo(() => {
+    let result = filePairs;
+
+    // Status filter
+    switch (filter) {
+      case "different": result = result.filter(p => p.diffStatus === "different"); break;
+      case "same": result = result.filter(p => p.diffStatus === "identical"); break;
+      case "left-only": result = result.filter(p => p.status === "old-only"); break;
+      case "right-only": result = result.filter(p => p.status === "new-only"); break;
+    }
+
+    // Filename filter (wildcard)
+    if (filenameFilter) {
+      result = result.filter(p => matchWildcard(p.filename, filenameFilter));
+    }
+
+    return result;
+  }, [filePairs, filter, filenameFilter]);
+
+  // Group by dir — unified: ALL files from both sides, so rows stay aligned
+  const groupFiles = (pairs: FilePair[]) => {
+    const map = new Map<string, FilePair[]>();
+    for (const p of pairs) {
+      const lastSlash = Math.max(p.relativePath.lastIndexOf("/"), p.relativePath.lastIndexOf("\\"));
+      const dir = lastSlash > 0 ? p.relativePath.substring(0, lastSlash) : "";
+      const list = map.get(dir) || [];
+      list.push(p);
+      map.set(dir, list);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
+  };
+
+  // Single unified groups — includes old-only, new-only, and matched files
+  const unifiedGroups = useMemo(() => groupFiles(filteredPairs), [filteredPairs]);
+
+  // Refresh
+  const handleRefresh = useCallback(async () => {
+    const s = useDiffStore.getState();
+    if (oldDir) { try { s.setOldFiles(await listExcelFiles(oldDir)); } catch {} }
+    if (newDir) { try { s.setNewFiles(await listExcelFiles(newDir)); } catch {} }
+    s.buildFilePairs();
+  }, [oldDir, newDir]);
+
+  // Manual verify all files
+  const handleVerifyAll = useCallback(async () => {
+    setVerifying(true);
+    try {
+      await useDiffStore.getState().verifyAllFiles();
+    } finally {
+      setVerifying(false);
+    }
+  }, []);
+
+  // Toggle folder collapse (sync both sides)
+  const toggleFolder = useCallback((dir: string) => {
+    setCollapsedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(dir)) {
+        next.delete(dir);
+      } else {
+        next.add(dir);
+      }
+      return next;
+    });
+  }, []);
+
+  // Open file for diff
+  const handleOpen = useCallback(async (pair: FilePair) => {
+    try {
+      if (pair.status === "old-only" || pair.status === "new-only") {
+        if (pair.oldPath) setOldWorkbook(await readExcel(pair.oldPath));
+        if (pair.newPath) setNewWorkbook(await readExcel(pair.newPath));
+        selectFilePair(pair); setView("diff"); return;
+      }
+      const [oldWb, newWb] = await Promise.all([readExcel(pair.oldPath!), readExcel(pair.newPath!)]);
+      setOldWorkbook(oldWb); setNewWorkbook(newWb); selectFilePair(pair);
+      const commonSheets = oldWb.sheetNames.filter(s => newWb.sheetNames.includes(s));
+      const sheetName = commonSheets[0] || oldWb.sheetNames[0] || "";
+      setCurrentSheet(sheetName);
+      if (sheetName) {
+        const keyCols = await detectKeyColumns(pair.newPath!, sheetName);
+        setKeyColumnIndices(keyCols);
+        const os = oldWb.sheets.find(s => s.name === sheetName);
+        const ns = newWb.sheets.find(s => s.name === sheetName);
+        if (os && ns) setDiffResult(computeDiff(os, ns, keyCols));
+      }
+      setView("diff");
+    } catch (e: any) {
+      alert(`打开失败: ${e?.message || String(e)}`);
+    }
+  }, [setView, selectFilePair, setOldWorkbook, setNewWorkbook, setCurrentSheet, setDiffResult, setKeyColumnIndices]);
+
+  // Selection
+  const handleSelect = useCallback((path: string, e: React.MouseEvent) => {
+    setSelectedPaths(prev => {
+      const next = new Set(prev);
+      if (e.ctrlKey || e.metaKey) {
+        if (next.has(path)) next.delete(path); else next.add(path);
+      } else if (e.shiftKey && prev.size > 0) {
+        // Range select: add all between last selected and this one
+        const allPaths = filteredPairs.map(p => p.relativePath);
+        const lastSelected = Array.from(prev).pop()!;
+        const startIdx = allPaths.indexOf(lastSelected);
+        const endIdx = allPaths.indexOf(path);
+        if (startIdx >= 0 && endIdx >= 0) {
+          const [from, to] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+          for (let i = from; i <= to; i++) next.add(allPaths[i]);
+        }
+      } else {
+        next.clear();
+        next.add(path);
+      }
+      return next;
+    });
+  }, [filteredPairs]);
+
+  // Double click → open diff
+  const handleDoubleClick = useCallback((pair: FilePair) => {
+    handleOpen(pair);
+  }, [handleOpen]);
+
+  // Refs for latest values (avoid stale closures in keyboard handler)
+  const handleRefreshRef = useRef(handleRefresh);
+  const handleOpenRef = useRef(handleOpen);
+  const selectedPathsRef = useRef(selectedPaths);
+  const filteredPairsRef = useRef(filteredPairs);
+  const filePairsRef = useRef(filePairs);
+  handleRefreshRef.current = handleRefresh;
+  handleOpenRef.current = handleOpen;
+  selectedPathsRef.current = selectedPaths;
+  filteredPairsRef.current = filteredPairs;
+  filePairsRef.current = filePairs;
+
+  // Right click → context menu
+  const handleContextMenu = useCallback((e: React.MouseEvent, side: "left" | "right") => {
+    e.preventDefault();
+    // If right-clicked item is not in selection, select it only
+    const paths = selectedPaths.size > 0 ? Array.from(selectedPaths) : [];
+    setContextMenu({ x: e.clientX, y: e.clientY, side, paths });
+  }, [selectedPaths]);
+
+  // Context menu action
+  const handleContextAction = useCallback(async (action: string) => {
+    if (!contextMenu) return;
+    const paths = contextMenu.paths;
+    setContextMenu(null);
+
+    if (action === "open-diff" && paths.length === 1) {
+      const pair = filePairs.find(p => p.relativePath === paths[0]);
+      if (pair) handleOpen(pair);
+      return;
+    }
+
+    if (action === "copy-left-to-right" || action === "copy-right-to-left") {
+      const matchedPairs = paths
+        .map(p => filePairs.find(f => f.relativePath === p))
+        .filter((p): p is FilePair => !!p && p.status === "matched");
+
+      if (matchedPairs.length === 0) return;
+      const dirLabel = action === "copy-left-to-right" ? "左→右" : "右→左";
+      if (!window.confirm(`确认将 ${matchedPairs.length} 个文件 ${dirLabel} 覆盖？`)) return;
+
+      setMerging(true);
+      let ok = 0, fail = 0;
+      for (const pair of matchedPairs) {
+        const src = action === "copy-left-to-right" ? pair.oldPath : pair.newPath;
+        const dst = action === "copy-left-to-right" ? pair.newPath : pair.oldPath;
+        if (!src || !dst) continue;
+        setMergeProgress(`${pair.relativePath} (${ok + fail + 1}/${matchedPairs.length})`);
+        try {
+          const wb = await readExcel(src);
+          await writeExcel(dst, wb.sheets);
+          useDiffStore.getState().markFileAsIdentical(pair.relativePath);
+          ok++;
+        } catch { fail++; }
+      }
+      setMerging(false); setMergeProgress("");
+      // Update file pairs directly instead of re-verifying (avoids overwriting markFileAsIdentical)
+      useDiffStore.getState().setFilePairs(
+        useDiffStore.getState().filePairs.map(p =>
+          matchedPairs.some(mp => mp.relativePath === p.relativePath)
+            ? { ...p, diffStatus: "identical" as const }
+            : p
+        )
+      );
+      setSelectedPaths(new Set());
+      alert(`合并完成！成功: ${ok}, 失败: ${fail}`);
+    }
+  }, [contextMenu, filePairs, handleOpen]);
+
+  // Keyboard — register once, read latest values via refs
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const sp = selectedPathsRef.current;
+      const fp = filePairsRef.current;
+      const flp = filteredPairsRef.current;
+
+      if (e.key === "F5") { e.preventDefault(); handleRefreshRef.current(); }
+      if (e.ctrlKey && e.key === "b") { e.preventDefault(); setFilter(f => f === "different" ? "all" : "different"); }
+      if (e.key === "Enter" && sp.size === 1) {
+        const pair = fp.find(p => p.relativePath === Array.from(sp)[0]);
+        if (pair) handleOpenRef.current(pair);
+      }
+      if (e.key === "Escape") { setSelectedPaths(new Set()); setContextMenu(null); }
+      if (e.ctrlKey && e.key === "a") { e.preventDefault(); setSelectedPaths(new Set(flp.map(p => p.relativePath))); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (filePairs.length === 0) {
+    return <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">请先选择两个目录</div>;
+  }
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-4 py-1.5 bg-gray-50 border-b text-xs">
+        <div className="flex items-center gap-1">
+          {(["all", "different", "same", "left-only", "right-only"] as FilterMode[]).map(f => {
+            const labels: Record<FilterMode, string> = {
+              all: `全部(${stats.total})`, different: `不同(${stats.different})`,
+              same: `相同(${stats.identical})`, "left-only": `仅左(${stats.oldOnly})`,
+              "right-only": `仅右(${stats.newOnly})`,
+            };
+            const colors: Record<FilterMode, string> = {
+              all: "bg-blue-600 text-white", different: "bg-yellow-500 text-white",
+              same: "bg-green-600 text-white", "left-only": "bg-gray-600 text-white",
+              "right-only": "bg-gray-600 text-white",
+            };
+            if (f === "left-only" && stats.oldOnly === 0) return null;
+            if (f === "right-only" && stats.newOnly === 0) return null;
+            return (
+              <button key={f} onClick={() => setFilter(f)}
+                className={`px-2 py-0.5 rounded ${filter === f ? colors[f] : "hover:bg-gray-200"}`}>
+                {labels[f]}
+              </button>
+            );
+          })}
+          <span className="border-l border-gray-300 h-4 mx-2" />
+          <div className="flex items-center gap-1">
+            <span className="text-gray-500">文件名:</span>
+            <input
+              type="text"
+              placeholder="*.xlsx, report*, ..."
+              value={filenameFilter}
+              onChange={(e) => setFilenameFilter(e.target.value)}
+              className="w-36 px-2 py-0.5 border rounded bg-white text-xs outline-none focus:border-blue-400"
+            />
+            {filenameFilter && (
+              <button
+                onClick={() => setFilenameFilter("")}
+                className="text-gray-400 hover:text-gray-600 px-1"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedPaths.size > 0 && <span className="text-blue-600">已选 {selectedPaths.size} 个</span>}
+          <button onClick={handleVerifyAll} disabled={verifying}
+            className="flex items-center gap-1 px-2 py-0.5 bg-blue-500 text-white hover:bg-blue-600 rounded disabled:opacity-50">
+            {verifying ? <SpinnerIcon size={13} /> : null} 对比
+          </button>
+          <button onClick={handleRefresh} className="flex items-center gap-1 px-2 py-0.5 bg-gray-200 hover:bg-gray-300 rounded">
+            <RefreshIcon size={13} /> 刷新
+          </button>
+          {merging && <span className="flex items-center gap-1 text-orange-500"><SpinnerIcon size={13} /> {mergeProgress}</span>}
+        </div>
+      </div>
+
+      {/* Dual panel */}
+      <div className="flex-1 flex overflow-hidden" onClick={() => setContextMenu(null)}>
+        {/* Left */}
+        <div className="flex-1 border-r overflow-auto"
+          onContextMenu={(e) => { e.preventDefault(); if (selectedPaths.size > 0) handleContextMenu(e, "left"); }}>
+          <div className="sticky top-0 bg-gray-100 px-4 py-1 text-xs font-mono border-b z-10 text-gray-600">
+            {oldDir || "(未选择)"}
+          </div>
+          <div className="sticky top-6 bg-gray-50 px-4 py-0.5 text-xs text-gray-500 border-b z-10 flex items-center">
+            <span className="w-3 mr-1"></span>
+            <span className="flex-1">文件名</span>
+            <span className="w-20 text-right">修改时间</span>
+            <span className="w-16 text-right ml-2">大小</span>
+          </div>
+          {unifiedGroups.map(([dir, files]) => (
+            <FolderGroup key={dir} dir={dir} files={files} side="left"
+              selected={selectedPaths} onSelect={handleSelect}
+              onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
+              collapsed={collapsedFolders.has(dir)} onToggle={toggleFolder} />
+          ))}
+        </div>
+
+        {/* Right */}
+        <div className="flex-1 overflow-auto"
+          onContextMenu={(e) => { e.preventDefault(); if (selectedPaths.size > 0) handleContextMenu(e, "right"); }}>
+          <div className="sticky top-0 bg-gray-100 px-4 py-1 text-xs font-mono border-b z-10 text-gray-600">
+            {newDir || "(未选择)"}
+          </div>
+          <div className="sticky top-6 bg-gray-50 px-4 py-0.5 text-xs text-gray-500 border-b z-10 flex items-center">
+            <span className="w-3 mr-1"></span>
+            <span className="flex-1">文件名</span>
+            <span className="w-20 text-right">修改时间</span>
+            <span className="w-16 text-right ml-2">大小</span>
+          </div>
+          {unifiedGroups.map(([dir, files]) => (
+            <FolderGroup key={dir} dir={dir} files={files} side="right"
+              selected={selectedPaths} onSelect={handleSelect}
+              onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
+              collapsed={collapsedFolders.has(dir)} onToggle={toggleFolder} />
+          ))}
+        </div>
+      </div>
+
+      {/* Status bar */}
+      <div className="flex items-center px-4 py-1 bg-gray-100 border-t text-xs text-gray-600">
+        <span>相同 <b className="text-green-600">{stats.identical}</b></span>
+        <span className="mx-2">|</span>
+        <span>不同 <b className="text-red-600">{stats.different}</b></span>
+        <span className="mx-2">|</span>
+        <span>待确认 <b className="text-yellow-600">{stats.unknown}</b></span>
+        <span className="mx-2">|</span>
+        <span>仅左 <b className="text-gray-500">{stats.oldOnly}</b></span>
+        <span className="mx-2">|</span>
+        <span>仅右 <b className="text-gray-500">{stats.newOnly}</b></span>
+        <span className="mx-2">|</span>
+        <span>共 {stats.total} 个文件</span>
+        {verifying && <span className="ml-3 flex items-center gap-1 text-blue-500"><SpinnerIcon size={12} /> 对比中...</span>}
+        <span className="flex-1" />
+        <span className="text-gray-400">单击选中 | 双击打开 | 右键合并 | Ctrl+A 全选 | Shift+点击 范围选</span>
+      </div>
+
+      {/* Context menu */}
+      {contextMenu && (
+        <ContextMenu state={contextMenu} onAction={handleContextAction}
+          onClose={() => setContextMenu(null)} />
+      )}
+    </div>
+  );
+}
