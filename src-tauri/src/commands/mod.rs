@@ -1,9 +1,17 @@
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 use tauri::command;
 use crate::excel;
 use crate::models::{FileEntry, ParsedWorkbook, SheetData};
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHash {
+    pub path: String,
+    pub hash: String,
+}
 
 fn collect_excel_files(dir: &Path, base: &Path, entries: &mut Vec<FileEntry>) -> Result<(), String> {
     let extensions = ["xlsx", "xlsm", "xlsb", "xls"];
@@ -63,6 +71,41 @@ pub fn list_excel_files(dir_path: String) -> Result<Vec<FileEntry>, String> {
 
     entries.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     Ok(entries)
+}
+
+fn fnv1a_file_hash(file_path: &str) -> Result<String, String> {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut file = fs::File::open(file_path)
+        .map_err(|e| format!("打开文件 '{}' 失败: {}", file_path, e))?;
+    let mut hash = FNV_OFFSET;
+    let mut buffer = [0u8; 64 * 1024];
+
+    loop {
+        let len = file.read(&mut buffer)
+            .map_err(|e| format!("读取文件 '{}' 失败: {}", file_path, e))?;
+        if len == 0 {
+            break;
+        }
+        for byte in &buffer[..len] {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+    }
+
+    Ok(format!("{:016x}", hash))
+}
+
+#[command]
+pub fn hash_files(file_paths: Vec<String>) -> Result<Vec<FileHash>, String> {
+    file_paths
+        .into_iter()
+        .map(|path| {
+            let hash = fnv1a_file_hash(&path)?;
+            Ok(FileHash { path, hash })
+        })
+        .collect()
 }
 
 #[command]

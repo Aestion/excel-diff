@@ -32,6 +32,10 @@ describe('FileList', () => {
       setCurrentSheet: vi.fn(),
       setDiffResult: vi.fn(),
       setKeyColumnIndices: vi.fn(),
+      fileListCollapsedFolders: new Set(),
+      fileListKnownFolders: new Set(),
+      setFileListCollapsedFolders: (folders: Set<string>) => useDiffStore.setState({ fileListCollapsedFolders: folders } as any),
+      setFileListKnownFolders: (folders: Set<string>) => useDiffStore.setState({ fileListKnownFolders: folders } as any),
     } as any);
   });
 
@@ -79,5 +83,23 @@ describe('FileList', () => {
     expect(screen.getAllByText('report1.xlsx').length).toBeGreaterThanOrEqual(1);
     // data.xlsx should not appear in either panel after filtering
     expect(screen.queryAllByText('data.xlsx').length).toBe(0);
+  });
+
+  it('does not re-collapse previously expanded known folders after remount', () => {
+    const pairs: FilePair[] = [
+      { filename: 'a.xlsx', relativePath: 'folder/a.xlsx', oldPath: '/old/folder/a.xlsx', newPath: '/new/folder/a.xlsx', oldSize: 100, newSize: 100, status: 'matched', diffStatus: 'identical' },
+    ];
+    useDiffStore.setState({
+      filePairs: pairs,
+      oldDir: '/old',
+      newDir: '/new',
+      fileListCollapsedFolders: new Set(),
+      fileListKnownFolders: new Set(['folder']),
+    } as any);
+
+    render(<FileList />);
+
+    expect(screen.getAllByText('a.xlsx').length).toBeGreaterThanOrEqual(1);
+    expect(useDiffStore.getState().fileListCollapsedFolders.has('folder')).toBe(false);
   });
 });

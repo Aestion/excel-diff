@@ -16,27 +16,33 @@ function makeSheet(name: string, headers: string[], rows: (string | number | nul
 describe('buildKey', () => {
   it('builds key from single column', () => {
     const row = [{ value: 'A001' }, { value: 'Alice' }];
-    expect(buildKey(row, [0])).toBe('0:A001');
+    expect(JSON.parse(buildKey(row, [0]))).toEqual([[0, 'A001']]);
   });
 
   it('builds composite key from multiple columns', () => {
     const row = [{ value: 'A001' }, { value: 'Alice' }, { value: 25 }];
-    expect(buildKey(row, [0, 2])).toBe('0:A001|2:25');
+    expect(JSON.parse(buildKey(row, [0, 2]))).toEqual([[0, 'A001'], [2, '25']]);
   });
 
   it('handles null values', () => {
     const row = [{ value: null }, { value: 'Alice' }];
-    expect(buildKey(row, [0])).toBe('0:');
+    expect(JSON.parse(buildKey(row, [0]))).toEqual([[0, '']]);
   });
 
   it('handles number values', () => {
     const row = [{ value: 42 }, { value: 'Alice' }];
-    expect(buildKey(row, [0])).toBe('0:42');
+    expect(JSON.parse(buildKey(row, [0]))).toEqual([[0, '42']]);
   });
 
   it('handles float values', () => {
     const row = [{ value: 3.14 }, { value: 'Alice' }];
-    expect(buildKey(row, [0])).toBe('0:3.14');
+    expect(JSON.parse(buildKey(row, [0]))).toEqual([[0, '3.14']]);
+  });
+
+  it('does not collide when key values contain old separators', () => {
+    const rowA = [{ value: 'a|1:b' }, { value: 'c' }];
+    const rowB = [{ value: 'a' }, { value: 'b|1:c' }];
+    expect(buildKey(rowA, [0, 1])).not.toBe(buildKey(rowB, [0, 1]));
   });
 });
 
@@ -189,6 +195,39 @@ describe('computeDiff', () => {
     ]);
     const result = computeDiff(oldSheet, newSheet, [0]);
     expect(result.stats.unchanged).toBe(2);
+  });
+
+  it('keeps original row numbers for duplicate keys', () => {
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      ['1', 'Bob'],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      ['1', 'Bob'],
+    ]);
+    const result = computeDiff(oldSheet, newSheet, [0]);
+    expect(result.diffRows.map((r) => [r.oldRowNumber, r.newRowNumber])).toEqual([
+      [2, 2],
+      [3, 3],
+    ]);
+  });
+
+  it('matches duplicate keys by the closest row content', () => {
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Name', 'Dept'], [
+      ['1', 'Alice', 'Sales'],
+      ['1', 'Bob', 'HR'],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Name', 'Dept'], [
+      ['1', 'Bob', 'HR'],
+      ['1', 'Alice', 'Sales'],
+    ]);
+    const result = computeDiff(oldSheet, newSheet, [0]);
+    expect(result.stats.unchanged).toBe(2);
+    expect(result.diffRows.map((r) => [r.oldRowNumber, r.newRowNumber])).toEqual([
+      [2, 3],
+      [3, 2],
+    ]);
   });
 
   it('handles mismatched duplicate keys', () => {

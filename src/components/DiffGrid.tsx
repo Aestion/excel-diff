@@ -3,24 +3,29 @@ import { AgGridReact } from "ag-grid-react";
 import type { ColDef, RowClassParams, CellValueChangedEvent } from "ag-grid-community";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-alpine.css";
-import type { CellValue, ColumnInfo, CellData } from "../types/excel";
-import type { DiffResult } from "../types/diff";
+import type { CellValue, ColumnInfo } from "../types/excel";
+import type { DiffResult, DiffRow } from "../types/diff";
+
+function getDiffRowRef(row: DiffRow): string {
+  return `${row.oldRowNumber ?? ""}:${row.newRowNumber ?? ""}:${row.viewIndex}`;
+}
 
 interface DiffGridProps {
   side: "old" | "new";
   diffResult: DiffResult;
   columns: ColumnInfo[];
-  onCellEdit?: (rowKey: string, colIndex: number, oldValue: CellValue, newValue: CellValue, oldFormula?: string, newFormula?: string) => void;
-  onSelectionChanged?: (selectedKeys: string[]) => void;
+  onCellEdit?: (rowRef: string, colIndex: number, oldValue: CellValue, newValue: CellValue, oldFormula?: string, newFormula?: string) => void;
+  onSelectionChanged?: (selectedRowRefs: string[]) => void;
   filter?: "all" | "diff" | "same";
   scrollTop?: number;
   onScroll?: (scrollTop: number) => void;
   searchText?: string;
-  searchMatches?: { rowKey: string; side: "old" | "new"; colIndex: number; value: string }[];
+  searchMatches?: { rowRef: string; side: "old" | "new"; colIndex: number; value: string }[];
   currentMatchIndex?: number;
+  scrollToRowRef?: string | null;
 }
 
-export default function DiffGrid({ side, diffResult, columns, onCellEdit, onSelectionChanged, filter = "all", scrollTop, onScroll, searchText, searchMatches, currentMatchIndex }: DiffGridProps) {
+export default function DiffGrid({ side, diffResult, columns, onCellEdit, onSelectionChanged, filter = "all", scrollTop, onScroll, searchText, searchMatches, currentMatchIndex, scrollToRowRef }: DiffGridProps) {
   const gridRef = useRef<AgGridReact>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const syncingRef = useRef(false);
@@ -44,12 +49,12 @@ export default function DiffGrid({ side, diffResult, columns, onCellEdit, onSele
           },
           "cell-search-match": (p: any) => {
             if (!searchText || !searchMatches) return false;
-            return searchMatches.some(m => m.rowKey === p.data?._key && m.side === side && m.colIndex === col.index);
+            return searchMatches.some(m => m.rowRef === p.data?._rowRef && m.side === side && m.colIndex === col.index);
           },
           "cell-search-current": (p: any) => {
             if (!searchText || !searchMatches || currentMatchIndex == null) return false;
             const current = searchMatches[currentMatchIndex];
-            return current && current.rowKey === p.data?._key && current.side === side && current.colIndex === col.index;
+            return current && current.rowRef === p.data?._rowRef && current.side === side && current.colIndex === col.index;
           },
         },
       });
@@ -63,7 +68,7 @@ export default function DiffGrid({ side, diffResult, columns, onCellEdit, onSele
     return rows.map((dr) => {
       const sourceRow = side === "old" ? dr.oldRow : dr.newRow;
       const row: Record<string, any> = {
-        _key: dr.key, _status: dr.status, _diffRow: dr,
+        _key: dr.key, _rowRef: getDiffRowRef(dr), _status: dr.status, _diffRow: dr,
         _cellDiffs: dr.cellDiffs.map((d) => d.columnIndex),
       };
       if (sourceRow) {
@@ -90,7 +95,7 @@ export default function DiffGrid({ side, diffResult, columns, onCellEdit, onSele
       const field = event.colDef.field;
       if (!field?.startsWith("col_")) return;
       const colIndex = parseInt(field.slice(4));
-      const rowKey = event.data._key;
+      const rowRef = event.data._rowRef;
 
       const diffRow = event.data._diffRow;
       const sourceRow = side === "new" ? diffRow.newRow : diffRow.oldRow;
@@ -107,15 +112,23 @@ export default function DiffGrid({ side, diffResult, columns, onCellEdit, onSele
         newValue = oldValue;
       }
 
-      onCellEdit(rowKey, colIndex, oldValue, newValue, oldFormula, newFormula);
+      onCellEdit(rowRef, colIndex, oldValue, newValue, oldFormula, newFormula);
     },
     [onCellEdit, side]
   );
 
   const handleSelectionChanged = useCallback(() => {
     if (!onSelectionChanged || !gridRef.current?.api) return;
-    onSelectionChanged(gridRef.current.api.getSelectedNodes().map((n) => n.data?._key).filter(Boolean));
+    onSelectionChanged(gridRef.current.api.getSelectedNodes().map((n) => n.data?._rowRef).filter(Boolean));
   }, [onSelectionChanged]);
+
+  useEffect(() => {
+    if (!scrollToRowRef || !gridRef.current?.api) return;
+    const rowIndex = rowData.findIndex((row) => row._rowRef === scrollToRowRef);
+    if (rowIndex < 0) return;
+
+    gridRef.current.api.ensureIndexVisible(rowIndex, "middle");
+  }, [scrollToRowRef, rowData]);
 
   // Sync scroll via DOM
   useEffect(() => {

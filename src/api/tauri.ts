@@ -69,6 +69,13 @@ export async function readExcel(filePath: string): Promise<ParsedWorkbook> {
   );
 }
 
+export async function hashFiles(filePaths: string[]): Promise<Array<{ path: string; hash: string }>> {
+  return tryReal(
+    () => invoke("hash_files", { filePaths }),
+    () => mock.hashFiles(filePaths)
+  );
+}
+
 export async function writeExcel(
   filePath: string,
   sheets: SheetData[]

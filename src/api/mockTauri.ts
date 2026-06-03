@@ -70,6 +70,13 @@ export async function readExcel(filePath: string): Promise<ParsedWorkbook> {
   };
 }
 
+export async function hashFiles(filePaths: string): Promise<Array<{ path: string; hash: string }>>;
+export async function hashFiles(filePaths: string[]): Promise<Array<{ path: string; hash: string }>>;
+export async function hashFiles(filePaths: string | string[]): Promise<Array<{ path: string; hash: string }>> {
+  const paths = Array.isArray(filePaths) ? filePaths : [filePaths];
+  return paths.map((path) => ({ path, hash: `mock-${path}` }));
+}
+
 export async function writeExcel(filePath: string, sheets: SheetData[]): Promise<void> {
   await delay(200);
   console.log("[MOCK] Wrote workbook:", filePath);

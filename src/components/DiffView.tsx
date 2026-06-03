@@ -1,13 +1,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDiffStore } from "../stores/diffStore";
 import { useEditStore, type CellChange } from "../stores/editStore";
-import { computeDiff } from "../utils/diffEngine";
+import { cellDataEqual, computeDiff } from "../utils/diffEngine";
 import DiffGrid from "./DiffGrid";
 import KeyColumnSelector from "./KeyColumnSelector";
 import ErrorDialog from "./ErrorDialog";
 import { writeExcel, writeExcelChanges, listExcelFiles, readExcel, pickSavePath, saveTextFile } from "../api/tauri";
 import type { CellValue, Row, SheetData, CellData } from "../types/excel";
+import type { DiffResult, DiffRow } from "../types/diff";
 import { BackIcon, UndoIcon, RedoIcon, SaveIcon, ArrowRight, ArrowLeft, FilterIcon, KeyIcon, ChevronDown, FileIcon, ChevronDown as ChevronDownIcon, SearchIcon } from "./Icons";
+
+function getDiffRowRef(row: DiffRow): string {
+  return `${row.oldRowNumber ?? ""}:${row.newRowNumber ?? ""}:${row.viewIndex}`;
+}
+
+function findDiffRowByRef(diffResult: DiffResult | null, rowRef: string): DiffRow | undefined {
+  return diffResult?.diffRows.find((row) => getDiffRowRef(row) === rowRef);
+}
+
+function sheetRowsEqual(a: Row[], b: Row[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let rowIndex = 0; rowIndex < a.length; rowIndex++) {
+    if (a[rowIndex].length !== b[rowIndex].length) return false;
+    for (let colIndex = 0; colIndex < a[rowIndex].length; colIndex++) {
+      if (!cellDataEqual(a[rowIndex][colIndex], b[rowIndex][colIndex])) return false;
+    }
+  }
+  return true;
+}
+
+type DiffBlock = {
+  id: string;
+  startIndex: number;
+  endIndex: number;
+  startRef: string;
+};
 
 export default function DiffView() {
   const {
@@ -31,6 +58,7 @@ export default function DiffView() {
 
   const [leftSelected, setLeftSelected] = useState<string[]>([]);
   const [rightSelected, setRightSelected] = useState<string[]>([]);
+  const [activeDiffRowRef, setActiveDiffRowRef] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "diff" | "same">("all");
   const [scrollPos, setScrollPos] = useState(0);
   const [showKeySelector, setShowKeySelector] = useState(false);
@@ -39,15 +67,16 @@ export default function DiffView() {
   // Calculate search matches
   const searchMatches = useMemo(() => {
     if (!searchText || !diffResult) return [];
-    const matches: { rowKey: string; side: "old" | "new"; colIndex: number; value: string }[] = [];
+    const matches: { rowRef: string; side: "old" | "new"; colIndex: number; value: string }[] = [];
     const searchLower = searchText.toLowerCase();
 
     for (const dr of diffResult.diffRows) {
+      const rowRef = getDiffRowRef(dr);
       if (dr.oldRow) {
         for (let i = 0; i < dr.oldRow.length; i++) {
           const val = dr.oldRow[i]?.value;
           if (val != null && String(val).toLowerCase().includes(searchLower)) {
-            matches.push({ rowKey: dr.key, side: "old", colIndex: i, value: String(val) });
+            matches.push({ rowRef, side: "old", colIndex: i, value: String(val) });
           }
         }
       }
@@ -55,7 +84,7 @@ export default function DiffView() {
         for (let i = 0; i < dr.newRow.length; i++) {
           const val = dr.newRow[i]?.value;
           if (val != null && String(val).toLowerCase().includes(searchLower)) {
-            matches.push({ rowKey: dr.key, side: "new", colIndex: i, value: String(val) });
+            matches.push({ rowRef, side: "new", colIndex: i, value: String(val) });
           }
         }
       }
@@ -84,6 +113,7 @@ export default function DiffView() {
   const leftSelectedRef = useRef(leftSelected);
   const rightSelectedRef = useRef(rightSelected);
   const filterRef = useRef(filter);
+  const navigateDiffRef = useRef<(dir: "next" | "prev") => void>(() => {});
   showSearchRef.current = showSearch;
   searchTextRef.current = searchText;
   leftSelectedRef.current = leftSelected;
@@ -109,18 +139,14 @@ export default function DiffView() {
 
   // Find row index
   const findNewRowIndex = useCallback(
-    (diffKey: string): number => {
+    (rowRef: string): number => {
       if (!diffResult || !effectiveNewRows) return -1;
-      const dr = diffResult.diffRows.find((r) => r.key === diffKey);
-      if (!dr) return -1;
-      const ref = dr.newRow ?? dr.oldRow;
-      if (!ref) return -1;
-      return effectiveNewRows.findIndex((row, i) => {
-        if (i === 0) return false;
-        return keyColumnIndices.every((ci) => String(row[ci]?.value ?? "") === String(ref[ci]?.value ?? ""));
-      });
+      const dr = findDiffRowByRef(diffResult, rowRef);
+      if (!dr?.newRowNumber) return -1;
+      const idx = dr.newRowNumber - 1;
+      return idx < effectiveNewRows.length ? idx : -1;
     },
-    [diffResult, effectiveNewRows, keyColumnIndices]
+    [diffResult, effectiveNewRows]
   );
 
   // Keyboard shortcuts — register once, read latest values via refs
@@ -149,9 +175,9 @@ export default function DiffView() {
       // Ctrl+← : copy selected right → left (swap + copy)
       if (e.ctrlKey && e.key === "ArrowLeft") { e.preventDefault(); handleCopyRightToLeft(rs); }
       // Ctrl+G : next diff
-      if (e.ctrlKey && !e.shiftKey && e.key === "g") { e.preventDefault(); navigateDiff("next"); }
+      if (e.ctrlKey && !e.shiftKey && e.key === "g") { e.preventDefault(); navigateDiffRef.current("next"); }
       // Ctrl+Shift+G : prev diff
-      if (e.ctrlKey && e.shiftKey && e.key === "G") { e.preventDefault(); navigateDiff("prev"); }
+      if (e.ctrlKey && e.shiftKey && e.key === "G") { e.preventDefault(); navigateDiffRef.current("prev"); }
       // Ctrl+B : filter diffs
       if (e.ctrlKey && e.key === "b") { e.preventDefault(); setFilter((f) => f === "diff" ? "all" : "diff"); }
       // Ctrl+S : save
@@ -178,34 +204,94 @@ export default function DiffView() {
     [effectiveNewRows, setEffectiveNewRows]
   );
 
+  const diffBlocks = useMemo<DiffBlock[]>(() => {
+    if (!diffResult) return [];
+
+    const blocks: DiffBlock[] = [];
+    let current: DiffBlock | null = null;
+
+    for (const row of diffResult.diffRows) {
+      if (row.status === "unchanged") {
+        current = null;
+        continue;
+      }
+
+      const rowRef = getDiffRowRef(row);
+      const rowIndex = row.viewIndex;
+      if (current && rowIndex === current.endIndex + 1) {
+        current.endIndex = rowIndex;
+        continue;
+      }
+
+      current = {
+        id: `${rowRef}:${blocks.length}`,
+        startIndex: rowIndex,
+        endIndex: rowIndex,
+        startRef: rowRef,
+      };
+      blocks.push(current);
+    }
+
+    return blocks;
+  }, [diffResult]);
+
+  const findDiffBlockIndexByRef = useCallback(
+    (rowRef: string | null | undefined): number => {
+      if (!rowRef || !diffResult) return -1;
+      const row = findDiffRowByRef(diffResult, rowRef);
+      if (!row || row.status === "unchanged") return -1;
+      return diffBlocks.findIndex((block) => row.viewIndex >= block.startIndex && row.viewIndex <= block.endIndex);
+    },
+    [diffBlocks, diffResult]
+  );
+
+  const jumpToDiffBlock = useCallback((block: DiffBlock) => {
+    setActiveDiffRowRef(block.startRef);
+  }, []);
+
   // Navigate to next/prev diff
   const navigateDiff = useCallback(
     (dir: "next" | "prev") => {
-      if (!diffResult) return;
-      const diffs = diffResult.diffRows.filter((r) => r.status !== "unchanged");
-      if (diffs.length === 0) return;
+      if (diffBlocks.length === 0) return;
 
       // Find current selection
-      const currentKey = leftSelected[0] || rightSelected[0];
-      const idx = currentKey ? diffs.findIndex((d) => d.key === currentKey) : -1;
+      const currentRef = activeDiffRowRef || leftSelected[0] || rightSelected[0];
+      const idx = findDiffBlockIndexByRef(currentRef);
       const nextIdx = dir === "next"
-        ? (idx + 1) % diffs.length
-        : (idx - 1 + diffs.length) % diffs.length;
-      const nextKey = diffs[nextIdx].key;
-      setLeftSelected([nextKey]);
-      setRightSelected([nextKey]);
+        ? (idx + 1) % diffBlocks.length
+        : (idx - 1 + diffBlocks.length) % diffBlocks.length;
+      setActiveDiffRowRef(diffBlocks[nextIdx].startRef);
     },
-    [diffResult, leftSelected, rightSelected]
+    [activeDiffRowRef, diffBlocks, findDiffBlockIndexByRef, leftSelected, rightSelected]
   );
+  navigateDiffRef.current = navigateDiff;
 
   const handleBack = useCallback(async () => {
     if (hasUnsavedChanges && !window.confirm("有未保存的更改，确定要返回吗？")) return;
     const { oldDir, newDir, setOldFiles, setNewFiles, buildFilePairs } = useDiffStore.getState();
     if (oldDir) { try { setOldFiles(await listExcelFiles(oldDir)); } catch {} }
     if (newDir) { try { setNewFiles(await listExcelFiles(newDir)); } catch {} }
-    buildFilePairs();
+    await buildFilePairs();
     setView("directory");
   }, [setView, hasUnsavedChanges]);
+
+  const refreshAndVerifyFilePair = useCallback(async (relativePath: string) => {
+    const { oldDir, newDir, setOldFiles, setNewFiles, buildFilePairs, verifyFilePair } = useDiffStore.getState();
+    if (oldDir) { try { setOldFiles(await listExcelFiles(oldDir)); } catch {} }
+    if (newDir) { try { setNewFiles(await listExcelFiles(newDir)); } catch {} }
+    await buildFilePairs();
+    await verifyFilePair(relativePath, true);
+  }, []);
+
+  const isRightDirty = useCallback(
+    (rows: Row[] | null): boolean => {
+      if (!rows || !newWorkbook) return false;
+      const baseline = newWorkbook.sheets.find((s) => s.name === currentSheet)?.rows;
+      if (!baseline) return false;
+      return !sheetRowsEqual(rows, baseline);
+    },
+    [currentSheet, newWorkbook]
+  );
 
   const handleSheetChange = useCallback(
     (sheetName: string) => { setCurrentSheet(sheetName); useEditStore.getState().clear(); },
@@ -214,26 +300,24 @@ export default function DiffView() {
 
   // Copy left → right (old values overwrite new)
   const handleCopyLeftToRight = useCallback(
-    (keys: string[]) => {
+    (rowRefs: string[]) => {
+      const keys = rowRefs;
       const dr = diffResultRef.current;
       const rows = effectiveNewRowsRef.current;
-      if (!dr || !rows || keys.length === 0) return;
+      if (!dr || !rows || rowRefs.length === 0) return;
 
       const localRows = rows.map((r) => r.map((c) => ({ ...c })));
       const undoChanges: CellChange[] = [];
       const redoChanges: CellChange[] = [];
 
-      for (const key of keys) {
-        const diffRow = dr.diffRows.find((r) => r.key === key);
+      for (const rowRef of rowRefs) {
+        const diffRow = findDiffRowByRef(dr, rowRef);
         if (!diffRow || !diffRow.oldRow) continue;
+        const key = diffRow.key;
 
         if (diffRow.newRow) {
           // Row exists on right → overwrite cells
-          const ref = diffRow.newRow;
-          const idx = localRows.findIndex((row, i) => {
-            if (i === 0) return false;
-            return keyColumnIndices.every((ci) => String(row[ci]?.value ?? "") === String(ref[ci]?.value ?? ""));
-          });
+          const idx = diffRow.newRowNumber ? diffRow.newRowNumber - 1 : -1;
           if (idx < 0) continue;
           // Copy all old values to new row
           for (let col = 0; col < diffRow.oldRow.length; col++) {
@@ -245,8 +329,8 @@ export default function DiffView() {
             const targetFormula = targetCell?.formula;
 
             if (JSON.stringify({ value: currentValue, formula: currentFormula }) !== JSON.stringify({ value: targetValue, formula: targetFormula })) {
-              undoChanges.push({ rowKey: key, columnIndex: col, value: currentValue, formula: currentFormula });
-              redoChanges.push({ rowKey: key, columnIndex: col, value: targetValue, formula: targetFormula });
+              undoChanges.push({ rowKey: key, rowRef, columnIndex: col, value: currentValue, formula: currentFormula });
+              redoChanges.push({ rowKey: key, rowRef, columnIndex: col, value: targetValue, formula: targetFormula });
               while (localRows[idx].length <= col) localRows[idx].push({ value: null });
               localRows[idx][col] = { ...targetCell };
             }
@@ -255,15 +339,15 @@ export default function DiffView() {
           for (let col = diffRow.oldRow.length; col < localRows[idx].length; col++) {
             const currentCell = localRows[idx][col];
             if (currentCell?.value !== null || currentCell?.formula !== undefined) {
-              undoChanges.push({ rowKey: key, columnIndex: col, value: currentCell?.value ?? null, formula: currentCell?.formula });
-              redoChanges.push({ rowKey: key, columnIndex: col, value: null });
+              undoChanges.push({ rowKey: key, rowRef, columnIndex: col, value: currentCell?.value ?? null, formula: currentCell?.formula });
+              redoChanges.push({ rowKey: key, rowRef, columnIndex: col, value: null });
               localRows[idx][col] = { value: null };
             }
           }
         } else {
           // Row only on left → insert
-          undoChanges.push({ rowKey: key, columnIndex: -1, value: null });
-          redoChanges.push({ rowKey: key, columnIndex: -2, value: JSON.stringify(diffRow.oldRow) });
+          undoChanges.push({ rowKey: key, rowRef, columnIndex: -1, value: null });
+          redoChanges.push({ rowKey: key, rowRef, columnIndex: -2, value: JSON.stringify(diffRow.oldRow) });
           localRows.push(diffRow.oldRow.map((c) => ({ ...c })));
         }
       }
@@ -271,16 +355,17 @@ export default function DiffView() {
       if (undoChanges.length > 0) {
         pushEdit({ type: "batch-copy", undoPayload: undoChanges, redoPayload: redoChanges, description: `左→右 ${keys.length}行` });
         setEffectiveNewRows(localRows);
-        setHasUnsavedChanges(true);
+        setHasUnsavedChanges(isRightDirty(localRows));
       }
     },
-    [keyColumnIndices, pushEdit, setEffectiveNewRows, setHasUnsavedChanges]
+    [pushEdit, setEffectiveNewRows, setHasUnsavedChanges, isRightDirty]
   );
 
   // Copy right → left (new values overwrite old file)
   const handleCopyRightToLeft = useCallback(
-    async (keys: string[]) => {
-      if (!diffResult || !effectiveNewRows || !oldWorkbook || !selectedFilePair?.oldPath || keys.length === 0) return;
+    async (rowRefs: string[]) => {
+      const keys = rowRefs;
+      if (!diffResult || !effectiveNewRows || !oldWorkbook || !selectedFilePair?.oldPath || rowRefs.length === 0) return;
 
       const oldSheetData = oldWorkbook.sheets.find((s) => s.name === currentSheet);
       if (!oldSheetData) return;
@@ -288,17 +373,11 @@ export default function DiffView() {
       // Build modified old rows
       const modifiedOldRows = oldSheetData.rows.map((r) => r.map((c) => ({ ...c })));
 
-      for (const key of keys) {
-        const dr = diffResult.diffRows.find((r) => r.key === key);
+      for (const rowRef of rowRefs) {
+        const dr = findDiffRowByRef(diffResult, rowRef);
         if (!dr) continue;
 
-        // Find the old row by key
-        const ref = dr.oldRow ?? dr.newRow;
-        if (!ref) continue;
-        const idx = modifiedOldRows.findIndex((row, i) => {
-          if (i === 0) return false;
-          return keyColumnIndices.every((ci) => String(row[ci]?.value ?? "") === String(ref[ci]?.value ?? ""));
-        });
+        const idx = dr.oldRowNumber ? dr.oldRowNumber - 1 : -1;
         if (idx < 0) continue;
 
         if (dr.newRow) {
@@ -327,26 +406,29 @@ export default function DiffView() {
         const freshOld = await readExcel(selectedFilePair.oldPath);
         useDiffStore.getState().setOldWorkbook(freshOld);
         useEditStore.getState().clear();
-        setHasUnsavedChanges(true);
+        setHasUnsavedChanges(isRightDirty(effectiveNewRows));
+        await refreshAndVerifyFilePair(selectedFilePair.relativePath);
 
         alert(`已复制 ${keys.length} 行到左侧`);
       } catch (e: any) {
         setError({ title: "右→左复制失败", message: e?.message || String(e) });
       }
     },
-    [diffResult, effectiveNewRows, oldWorkbook, selectedFilePair, currentSheet, keyColumnIndices, setHasUnsavedChanges]
+    [diffResult, effectiveNewRows, oldWorkbook, selectedFilePair, currentSheet, setHasUnsavedChanges, refreshAndVerifyFilePair, isRightDirty]
   );
 
   // Cell edit
   const handleCellEdit = useCallback(
-    (rowKey: string, colIndex: number, oldValue: CellValue, newValue: CellValue, oldFormula?: string, newFormula?: string) => {
+    (rowRef: string, colIndex: number, oldValue: CellValue, newValue: CellValue, oldFormula?: string, newFormula?: string) => {
       if ((oldValue === newValue && oldFormula === newFormula) || !effectiveNewRows) return;
-      const idx = findNewRowIndex(rowKey);
+      const diffRow = findDiffRowByRef(diffResult, rowRef);
+      if (!diffRow) return;
+      const idx = findNewRowIndex(rowRef);
       if (idx < 0) return;
       pushEdit({
         type: "cell-edit",
-        undoPayload: [{ rowKey, columnIndex: colIndex, value: oldValue, formula: oldFormula }],
-        redoPayload: [{ rowKey, columnIndex: colIndex, value: newValue, formula: newFormula }],
+        undoPayload: [{ rowKey: diffRow.key, rowRef, columnIndex: colIndex, value: oldValue, formula: oldFormula }],
+        redoPayload: [{ rowKey: diffRow.key, rowRef, columnIndex: colIndex, value: newValue, formula: newFormula }],
         description: "编辑"
       });
       const newRows = effectiveNewRows.map((row, i) => {
@@ -359,7 +441,7 @@ export default function DiffView() {
       setEffectiveNewRows(newRows);
       setHasUnsavedChanges(true);
     },
-    [effectiveNewRows, findNewRowIndex, pushEdit, setEffectiveNewRows, setHasUnsavedChanges]
+    [diffResult, effectiveNewRows, findNewRowIndex, pushEdit, setEffectiveNewRows, setHasUnsavedChanges]
   );
 
   // Undo
@@ -369,21 +451,20 @@ export default function DiffView() {
     for (const c of op.undoPayload) {
       if (c.columnIndex === -1) { localRows.pop(); }
       else if (c.columnIndex >= 0) {
-        const dr = diffResult?.diffRows.find((r) => r.key === c.rowKey);
+        const dr = c.rowRef
+          ? findDiffRowByRef(diffResult ?? null, c.rowRef)
+          : diffResult?.diffRows.find((r) => r.key === c.rowKey);
         if (!dr) continue;
-        const ref = dr.newRow ?? dr.oldRow; if (!ref) continue;
-        const idx = localRows.findIndex((row, i) => {
-          if (i === 0) return false;
-          return keyColumnIndices.every((ci) => String(row[ci]?.value ?? "") === String(ref[ci]?.value ?? ""));
-        });
-        if (idx >= 0) {
+        const idx = dr.newRowNumber ? dr.newRowNumber - 1 : -1;
+        if (idx >= 0 && idx < localRows.length) {
           while (localRows[idx].length <= c.columnIndex) localRows[idx].push({ value: null });
           localRows[idx][c.columnIndex] = { value: c.value, formula: c.formula };
         }
       }
     }
     setEffectiveNewRows(localRows);
-  }, [undo, effectiveNewRows, diffResult, keyColumnIndices, setEffectiveNewRows]);
+    setHasUnsavedChanges(isRightDirty(localRows));
+  }, [undo, effectiveNewRows, diffResult, setEffectiveNewRows, setHasUnsavedChanges, isRightDirty]);
 
   // Redo
   const handleRedo = useCallback(() => {
@@ -395,21 +476,20 @@ export default function DiffView() {
         localRows.push(rowData.map((cell: CellData) => ({ ...cell })));
       }
       else if (c.columnIndex >= 0) {
-        const dr = diffResult?.diffRows.find((r) => r.key === c.rowKey);
+        const dr = c.rowRef
+          ? findDiffRowByRef(diffResult ?? null, c.rowRef)
+          : diffResult?.diffRows.find((r) => r.key === c.rowKey);
         if (!dr) continue;
-        const ref = dr.newRow ?? dr.oldRow; if (!ref) continue;
-        const idx = localRows.findIndex((row, i) => {
-          if (i === 0) return false;
-          return keyColumnIndices.every((ci) => String(row[ci]?.value ?? "") === String(ref[ci]?.value ?? ""));
-        });
-        if (idx >= 0) {
+        const idx = dr.newRowNumber ? dr.newRowNumber - 1 : -1;
+        if (idx >= 0 && idx < localRows.length) {
           while (localRows[idx].length <= c.columnIndex) localRows[idx].push({ value: null });
           localRows[idx][c.columnIndex] = { value: c.value, formula: c.formula };
         }
       }
     }
     setEffectiveNewRows(localRows);
-  }, [redo, effectiveNewRows, diffResult, keyColumnIndices, setEffectiveNewRows]);
+    setHasUnsavedChanges(isRightDirty(localRows));
+  }, [redo, effectiveNewRows, diffResult, setEffectiveNewRows, setHasUnsavedChanges, isRightDirty]);
 
   // Save
   // Save right side — incremental (only changed cells)
@@ -449,6 +529,7 @@ export default function DiffView() {
       // If no changes and no inserts, skip write
       if (changes.length === 0 && insertRows.length === 0) {
         setHasUnsavedChanges(false);
+        useEditStore.getState().clear();
         return;
       }
 
@@ -478,25 +559,10 @@ export default function DiffView() {
       // effectiveNewRows is already correct
       useEditStore.getState().clear();
 
-      // Re-check identical
-      if (selectedFilePair.oldPath && selectedFilePair.newPath) {
-        try {
-          const freshOld = await readExcel(selectedFilePair.oldPath);
-          const freshNew = await readExcel(selectedFilePair.newPath);
-          const oSheet = freshOld.sheets.find((s) => s.name === currentSheet);
-          const nSheet = freshNew.sheets.find((s) => s.name === currentSheet);
-          if (oSheet && nSheet && keyColumnIndices.length > 0) {
-            const recheck = computeDiff(oSheet, nSheet, keyColumnIndices);
-            if (recheck.stats.added + recheck.stats.deleted + recheck.stats.modified === 0) {
-              useDiffStore.getState().markFileAsIdentical(selectedFilePair.relativePath);
-            }
-          }
-        } catch {}
-      }
-      useDiffStore.getState().buildFilePairs();
+      await refreshAndVerifyFilePair(selectedFilePair.relativePath);
       alert("右侧保存成功！");
     } catch (e: any) { setError({ title: "保存失败", message: e?.message || String(e) }); }
-  }, [newWorkbook, effectiveNewRows, selectedFilePair, currentSheet, keyColumnIndices, setHasUnsavedChanges, setEffectiveNewRows]);
+  }, [newWorkbook, effectiveNewRows, selectedFilePair, currentSheet, setHasUnsavedChanges, setEffectiveNewRows, refreshAndVerifyFilePair]);
 
   // Save left side (old data)
   const handleSaveLeft = useCallback(async () => {
@@ -508,10 +574,10 @@ export default function DiffView() {
       const freshWb = await readExcel(selectedFilePair.oldPath);
       useDiffStore.getState().setOldWorkbook(freshWb);
       useEditStore.getState().clear();
-      useDiffStore.getState().buildFilePairs();
+      await refreshAndVerifyFilePair(selectedFilePair.relativePath);
       alert("左侧保存成功！");
     } catch (e: any) { setError({ title: "保存失败", message: e?.message || String(e) }); }
-  }, [oldWorkbook, selectedFilePair, setHasUnsavedChanges]);
+  }, [oldWorkbook, selectedFilePair, setHasUnsavedChanges, refreshAndVerifyFilePair]);
 
   // Export diff report as CSV
   const handleExport = useCallback(async () => {
@@ -600,6 +666,10 @@ export default function DiffView() {
     : diffResult.diffRows;
 
   const diffCount = diffResult.stats.modified + diffResult.stats.added + diffResult.stats.deleted;
+  const diffBlockCount = diffBlocks.length;
+  const activeDiffBlockIndex = findDiffBlockIndexByRef(activeDiffRowRef);
+  const overviewRowCount = Math.max(diffResult.diffRows.length, 1);
+  const overviewHeightPx = Math.max(96, overviewRowCount * 26 + 34);
 
   return (
     <div className="flex-1 flex flex-col h-full">
@@ -630,6 +700,19 @@ export default function DiffView() {
             title="Ctrl+F">
             <SearchIcon size={13} />
             查找
+          </button>
+          <span className="text-gray-300 mx-1">|</span>
+          <button onClick={() => navigateDiff("prev")} disabled={diffBlockCount === 0}
+            className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-gray-100 disabled:opacity-30"
+            title={`Ctrl+Shift+G · ${diffBlockCount} 个差异块`}>
+            <span className="rotate-180"><ChevronDownIcon size={12} /></span>
+            上一个
+          </button>
+          <button onClick={() => navigateDiff("next")} disabled={diffBlockCount === 0}
+            className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-gray-100 disabled:opacity-30"
+            title={`Ctrl+G · ${diffBlockCount} 个差异块`}>
+            <ChevronDownIcon size={12} />
+            下一个
           </button>
           <span className="text-gray-300 mx-1">|</span>
           <button onClick={() => setShowLegend(!showLegend)}
@@ -663,7 +746,7 @@ export default function DiffView() {
             className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-600 text-white hover:bg-green-700">
             <SaveIcon size={13} /> 保存右侧
           </button>
-          {hasUnsavedChanges && <span className="text-orange-500 ml-1">●</span>}
+          {hasUnsavedChanges && <span className="text-orange-500 ml-1" title="有未保存修改" aria-label="有未保存修改">●</span>}
           <span className="text-gray-300 mx-1">|</span>
           <button onClick={handleExport}
             className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-gray-100">
@@ -753,12 +836,13 @@ export default function DiffView() {
       </div>
 
       {/* Grids */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative pr-3">
         <div className="flex-1 border-r">
           <DiffGrid side="old" diffResult={diffResult} columns={oldSheet?.columns ?? []}
             onSelectionChanged={setLeftSelected} filter={filter}
             scrollTop={scrollPos} onScroll={setScrollPos}
-            searchText={searchText} searchMatches={searchMatches} currentMatchIndex={currentMatchIndex} />
+            searchText={searchText} searchMatches={searchMatches} currentMatchIndex={currentMatchIndex}
+            scrollToRowRef={activeDiffRowRef} />
         </div>
 
         {/* Center action bar — BC style */}
@@ -782,8 +866,34 @@ export default function DiffView() {
           <DiffGrid side="new" diffResult={diffResult} columns={newSheet?.columns ?? []}
             onCellEdit={handleCellEdit} onSelectionChanged={setRightSelected} filter={filter}
             scrollTop={scrollPos} onScroll={setScrollPos}
-            searchText={searchText} searchMatches={searchMatches} currentMatchIndex={currentMatchIndex} />
+            searchText={searchText} searchMatches={searchMatches} currentMatchIndex={currentMatchIndex}
+            scrollToRowRef={activeDiffRowRef} />
         </div>
+
+        {diffBlockCount > 0 && (
+          <div
+            className="absolute right-1 top-2 w-2 overflow-hidden rounded-sm border border-gray-300 bg-gray-100/90 shadow-sm z-20"
+            style={{ height: overviewHeightPx, maxHeight: "calc(100% - 16px)" }}
+            title={`${diffBlockCount} 个差异块`}
+          >
+            {diffBlocks.map((block, index) => {
+              const top = `${(block.startIndex / overviewRowCount) * 100}%`;
+              const height = `${Math.max(((block.endIndex - block.startIndex + 1) / overviewRowCount) * 100, 0.8)}%`;
+              const isActive = index === activeDiffBlockIndex;
+              return (
+                <button
+                  key={block.id}
+                  type="button"
+                  aria-label={`跳转到差异块 ${index + 1}`}
+                  title={`差异块 ${index + 1}: 行 ${block.startIndex + 1}-${block.endIndex + 1}`}
+                  onClick={() => jumpToDiffBlock(block)}
+                  className={`absolute left-0 right-0 rounded-sm ${isActive ? "bg-red-700 ring-1 ring-red-900" : "bg-red-500 hover:bg-red-600"}`}
+                  style={{ top, height }}
+                />
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Bottom status bar — BC style */}

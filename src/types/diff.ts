@@ -16,6 +16,8 @@ export interface DiffRow {
   viewIndex: number;
   status: RowStatus;
   key: RowKey;
+  oldRowNumber: number | null;
+  newRowNumber: number | null;
   oldRow: Row | null;
   newRow: Row | null;
   cellDiffs: CellDiff[];

@@ -4,6 +4,7 @@ import type { RowKey } from "../types/diff";
 
 export interface CellChange {
   rowKey: RowKey;
+  rowRef?: string;
   columnIndex: number;
   value: CellValue;
   formula?: string;

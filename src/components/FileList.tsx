@@ -187,6 +187,9 @@ export default function FileList() {
     setView, selectFilePair,
     setOldWorkbook, setNewWorkbook, setCurrentSheet,
     setDiffResult, setKeyColumnIndices,
+    fileListCollapsedFolders, fileListKnownFolders,
+    setFileListCollapsedFolders, setFileListKnownFolders,
+    fileListScrollTop, setFileListScrollTop,
     verifyAllFiles,
   } = useDiffStore();
 
@@ -197,7 +200,10 @@ export default function FileList() {
   const [filenameFilter, setFilenameFilter] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const leftPanelRef = useRef<HTMLDivElement>(null);
+  const rightPanelRef = useRef<HTMLDivElement>(null);
+  const syncingScrollRef = useRef(false);
+  const restoredScrollRef = useRef(false);
 
   // Collect all unique folders (including nested parent folders)
   const allFolders = useMemo(() => {
@@ -217,16 +223,21 @@ export default function FileList() {
 
   // Initialize collapsed state when folders change - only add new folders as collapsed
   useEffect(() => {
-    setCollapsedFolders((prev) => {
-      const next = new Set(prev);
-      for (const folder of allFolders) {
-        if (!prev.has(folder)) {
-          next.add(folder);
-        }
+    const nextCollapsed = new Set(useDiffStore.getState().fileListCollapsedFolders);
+    const nextKnown = new Set(fileListKnownFolders);
+    let changed = false;
+    for (const folder of allFolders) {
+      if (!nextKnown.has(folder)) {
+        nextKnown.add(folder);
+        nextCollapsed.add(folder);
+        changed = true;
       }
-      return next;
-    });
-  }, [allFolders]);
+    }
+    if (changed) {
+      setFileListKnownFolders(nextKnown);
+      setFileListCollapsedFolders(nextCollapsed);
+    }
+  }, [allFolders, fileListKnownFolders, setFileListCollapsedFolders, setFileListKnownFolders]);
 
   // Stats
   const stats = useMemo(() => ({
@@ -294,16 +305,14 @@ export default function FileList() {
 
   // Toggle folder collapse (sync both sides)
   const toggleFolder = useCallback((dir: string) => {
-    setCollapsedFolders(prev => {
-      const next = new Set(prev);
-      if (next.has(dir)) {
-        next.delete(dir);
-      } else {
-        next.add(dir);
-      }
-      return next;
-    });
-  }, []);
+    const next = new Set(fileListCollapsedFolders);
+    if (next.has(dir)) {
+      next.delete(dir);
+    } else {
+      next.add(dir);
+    }
+    setFileListCollapsedFolders(next);
+  }, [fileListCollapsedFolders, setFileListCollapsedFolders]);
 
   // Open file for diff
   const handleOpen = useCallback(async (pair: FilePair) => {
@@ -359,6 +368,35 @@ export default function FileList() {
   const handleDoubleClick = useCallback((pair: FilePair) => {
     handleOpen(pair);
   }, [handleOpen]);
+
+  const handlePanelScroll = useCallback((source: "left" | "right") => {
+    if (syncingScrollRef.current) return;
+    const sourceEl = source === "left" ? leftPanelRef.current : rightPanelRef.current;
+    const targetEl = source === "left" ? rightPanelRef.current : leftPanelRef.current;
+    if (!sourceEl || !targetEl) return;
+
+    setFileListScrollTop(sourceEl.scrollTop);
+    syncingScrollRef.current = true;
+    targetEl.scrollTop = sourceEl.scrollTop;
+    requestAnimationFrame(() => {
+      syncingScrollRef.current = false;
+    });
+  }, [setFileListScrollTop]);
+
+  useEffect(() => {
+    if (restoredScrollRef.current || fileListScrollTop <= 0) return;
+    const leftEl = leftPanelRef.current;
+    const rightEl = rightPanelRef.current;
+    if (!leftEl || !rightEl) return;
+
+    restoredScrollRef.current = true;
+    syncingScrollRef.current = true;
+    leftEl.scrollTop = fileListScrollTop;
+    rightEl.scrollTop = fileListScrollTop;
+    requestAnimationFrame(() => {
+      syncingScrollRef.current = false;
+    });
+  }, [fileListScrollTop, unifiedGroups]);
 
   // Refs for latest values (avoid stale closures in keyboard handler)
   const handleRefreshRef = useRef(handleRefresh);
@@ -514,7 +552,8 @@ export default function FileList() {
       {/* Dual panel */}
       <div className="flex-1 flex overflow-hidden" onClick={() => setContextMenu(null)}>
         {/* Left */}
-        <div className="flex-1 border-r overflow-auto"
+        <div ref={leftPanelRef} className="flex-1 border-r overflow-auto"
+          onScroll={() => handlePanelScroll("left")}
           onContextMenu={(e) => { e.preventDefault(); if (selectedPaths.size > 0) handleContextMenu(e, "left"); }}>
           <div className="sticky top-0 bg-gray-100 px-4 py-1 text-xs font-mono border-b z-10 text-gray-600">
             {oldDir || "(未选择)"}
@@ -529,12 +568,13 @@ export default function FileList() {
             <FolderGroup key={dir} dir={dir} files={files} side="left"
               selected={selectedPaths} onSelect={handleSelect}
               onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
-              collapsed={collapsedFolders.has(dir)} onToggle={toggleFolder} />
+              collapsed={fileListCollapsedFolders.has(dir)} onToggle={toggleFolder} />
           ))}
         </div>
 
         {/* Right */}
-        <div className="flex-1 overflow-auto"
+        <div ref={rightPanelRef} className="flex-1 overflow-auto"
+          onScroll={() => handlePanelScroll("right")}
           onContextMenu={(e) => { e.preventDefault(); if (selectedPaths.size > 0) handleContextMenu(e, "right"); }}>
           <div className="sticky top-0 bg-gray-100 px-4 py-1 text-xs font-mono border-b z-10 text-gray-600">
             {newDir || "(未选择)"}
@@ -549,7 +589,7 @@ export default function FileList() {
             <FolderGroup key={dir} dir={dir} files={files} side="right"
               selected={selectedPaths} onSelect={handleSelect}
               onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
-              collapsed={collapsedFolders.has(dir)} onToggle={toggleFolder} />
+              collapsed={fileListCollapsedFolders.has(dir)} onToggle={toggleFolder} />
           ))}
         </div>
       </div>

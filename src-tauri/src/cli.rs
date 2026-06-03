@@ -1,7 +1,9 @@
 // CLI binary for testing and automation
 
+#[allow(dead_code)]
 #[path = "excel/mod.rs"]
 mod excel;
+#[allow(dead_code)]
 #[path = "models/mod.rs"]
 mod models;
 

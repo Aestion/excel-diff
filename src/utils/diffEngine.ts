@@ -10,9 +10,9 @@ function serializeCellValue(v: CellValue): string {
 }
 
 export function buildKey(row: Row, keyColumns: number[]): RowKey {
-  return keyColumns
-    .map((col) => `${col}:${serializeCellValue(row[col]?.value ?? null)}`)
-    .join("|");
+  return JSON.stringify(
+    keyColumns.map((col) => [col, serializeCellValue(row[col]?.value ?? null)])
+  );
 }
 
 function cellValuesEqual(a: CellValue, b: CellValue): boolean {
@@ -31,6 +31,21 @@ function isEmptyValue(v: CellValue): boolean {
   return v === null || v === undefined || v === "";
 }
 
+export function cellDataEqual(oldCell: CellData | undefined, newCell: CellData | undefined): boolean {
+  const oldVal = oldCell?.value ?? null;
+  const newVal = newCell?.value ?? null;
+  const oldFormula = oldCell?.formula;
+  const newFormula = newCell?.formula;
+
+  // If both sides have the same formula, consider them equal
+  // regardless of cached computed value availability
+  if (oldFormula && newFormula && oldFormula === newFormula) return true;
+
+  if (isEmptyValue(oldVal) && isEmptyValue(newVal) && !oldFormula && !newFormula) return true;
+
+  return cellValuesEqual(oldVal, newVal) && cellFormulasEqual(oldFormula, newFormula);
+}
+
 function compareRows(oldRow: Row, newRow: Row): CellDiff[] {
   const diffs: CellDiff[] = [];
   const maxCols = Math.max(oldRow.length, newRow.length);
@@ -38,27 +53,13 @@ function compareRows(oldRow: Row, newRow: Row): CellDiff[] {
     const oldCell = col < oldRow.length ? oldRow[col] : { value: null };
     const newCell = col < newRow.length ? newRow[col] : { value: null };
 
-    const oldVal = oldCell.value;
-    const newVal = newCell.value;
-    const oldFormula = oldCell.formula;
-    const newFormula = newCell.formula;
-
-    // If both sides have the same formula, consider them equal
-    // regardless of cached computed value availability
-    if (oldFormula && newFormula && oldFormula === newFormula) continue;
-
-    if (isEmptyValue(oldVal) && isEmptyValue(newVal) && !oldFormula && !newFormula) continue;
-
-    const valueDiff = !cellValuesEqual(oldVal, newVal);
-    const formulaDiff = !cellFormulasEqual(oldFormula, newFormula);
-
-    if (valueDiff || formulaDiff) {
+    if (!cellDataEqual(oldCell, newCell)) {
       diffs.push({
         columnIndex: col,
-        oldValue: oldVal,
-        newValue: newVal,
-        oldFormula,
-        newFormula,
+        oldValue: oldCell.value,
+        newValue: newCell.value,
+        oldFormula: oldCell.formula,
+        newFormula: newCell.formula,
         isDifferent: true,
       });
     }
@@ -100,12 +101,19 @@ export function computeDiff(
 
     const newList = newByKey.get(key);
     let matchedNewIdx: number | null = null;
+    let matchedCellDiffs: CellDiff[] | null = null;
 
     if (newList) {
+      let bestScore = Number.POSITIVE_INFINITY;
       for (const ni of newList) {
         if (!consumedNew.has(ni)) {
-          matchedNewIdx = ni;
-          break;
+          const candidateDiffs = compareRows(oldRow, newSheet.rows[ni]);
+          if (candidateDiffs.length < bestScore) {
+            matchedNewIdx = ni;
+            matchedCellDiffs = candidateDiffs;
+            bestScore = candidateDiffs.length;
+            if (bestScore === 0) break;
+          }
         }
       }
     }
@@ -114,11 +122,13 @@ export function computeDiff(
       consumedOld.add(i);
       consumedNew.add(matchedNewIdx);
       const newRow = newSheet.rows[matchedNewIdx];
-      const cellDiffs = compareRows(oldRow, newRow);
+      const cellDiffs = matchedCellDiffs ?? compareRows(oldRow, newRow);
       diffRows.push({
         viewIndex: viewIndex++,
         status: cellDiffs.length > 0 ? "modified" : "unchanged",
         key,
+        oldRowNumber: i + 1,
+        newRowNumber: matchedNewIdx + 1,
         oldRow,
         newRow,
         cellDiffs,
@@ -130,6 +140,8 @@ export function computeDiff(
         viewIndex: viewIndex++,
         status: "deleted",
         key,
+        oldRowNumber: i + 1,
+        newRowNumber: null,
         oldRow,
         newRow: null,
         cellDiffs: [],
@@ -147,6 +159,8 @@ export function computeDiff(
       viewIndex: viewIndex++,
       status: "added",
       key,
+      oldRowNumber: null,
+      newRowNumber: i + 1,
       oldRow: null,
       newRow,
       cellDiffs: [],
