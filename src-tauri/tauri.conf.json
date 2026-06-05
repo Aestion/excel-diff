@@ -35,7 +35,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "write_excel.py"
+      "write_excel.py",
+      "write_excel_xlwings.py"
     ],
     "windows": {
       "nsis": {

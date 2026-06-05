@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeDiff, buildKey } from './diffEngine';
+import { computeDiff, buildKey, normalizeTextValue } from './diffEngine';
 import type { SheetData } from '../types/excel';
 
 function makeSheet(name: string, headers: string[], rows: (string | number | null)[][]): SheetData {
@@ -43,6 +43,20 @@ describe('buildKey', () => {
     const rowA = [{ value: 'a|1:b' }, { value: 'c' }];
     const rowB = [{ value: 'a' }, { value: 'b|1:c' }];
     expect(buildKey(rowA, [0, 1])).not.toBe(buildKey(rowB, [0, 1]));
+  });
+});
+
+describe('normalizeTextValue', () => {
+  it('normalizes Excel escaped newline text', () => {
+    const escaped = 'FireStart=0,0;_x005F_x000D__x000D_LaserWarn=Role/Kk/kk_laser_04;';
+    const plain = 'FireStart=0,0;_x000D_\nLaserWarn=Role/Kk/kk_laser_04;';
+    expect(normalizeTextValue(escaped)).toBe(plain);
+  });
+
+  it('normalizes COM-saved escaped newline text without adding an extra blank line', () => {
+    const escaped = 'FireStart=0,0;_x005F_x000D__x000D_\r\nLaserWarn=Role/Kk/kk_laser_04;';
+    const plain = 'FireStart=0,0;_x000D_\nLaserWarn=Role/Kk/kk_laser_04;';
+    expect(normalizeTextValue(escaped)).toBe(plain);
   });
 });
 
@@ -162,6 +176,20 @@ describe('computeDiff', () => {
     expect(result.stats.unchanged).toBe(1);
   });
 
+  it('treats Excel escaped newlines as equal to real newlines', () => {
+    const escaped = 'FireStart=0,0;_x005F_x000D__x000D_LaserWarn=Role/Kk/kk_laser_04;';
+    const plain = 'FireStart=0,0;_x000D_\rLaserWarn=Role/Kk/kk_laser_04;';
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Config'], [
+      ['1', plain],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Config'], [
+      ['1', escaped],
+    ]);
+    const result = computeDiff(oldSheet, newSheet, [0]);
+    expect(result.stats.unchanged).toBe(1);
+    expect(result.stats.modified).toBe(0);
+  });
+
   it('treats close floats as equal', () => {
     const oldSheet = makeSheet('Sheet1', ['ID', 'Value'], [
       ['1', 1.00000000001],
@@ -195,6 +223,22 @@ describe('computeDiff', () => {
     ]);
     const result = computeDiff(oldSheet, newSheet, [0]);
     expect(result.stats.unchanged).toBe(2);
+    expect(result.duplicateKeys).toEqual([{ key: '[[0,"1"]]', oldCount: 2, newCount: 2 }]);
+    expect(result.diffRows.every((row) => row.hasDuplicateKey)).toBe(true);
+  });
+
+  it('does not flag unique keys as duplicate', () => {
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      ['2', 'Bob'],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      ['2', 'Bob'],
+    ]);
+    const result = computeDiff(oldSheet, newSheet, [0]);
+    expect(result.duplicateKeys).toEqual([]);
+    expect(result.diffRows.some((row) => row.hasDuplicateKey)).toBe(false);
   });
 
   it('keeps original row numbers for duplicate keys', () => {
@@ -227,6 +271,26 @@ describe('computeDiff', () => {
     expect(result.diffRows.map((r) => [r.oldRowNumber, r.newRowNumber])).toEqual([
       [2, 3],
       [3, 2],
+    ]);
+  });
+
+  it('uses row proximity as a tie breaker for duplicate exact matches', () => {
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Name', 'Value'], [
+      ['1', 'A', 'same'],
+      ['1', 'B', 'target'],
+      ['1', 'A', 'same'],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Name', 'Value'], [
+      ['1', 'A', 'same'],
+      ['1', 'B', 'target'],
+      ['1', 'A', 'same'],
+    ]);
+    const result = computeDiff(oldSheet, newSheet, [0]);
+    expect(result.stats.modified).toBe(0);
+    expect(result.diffRows.map((r) => [r.oldRowNumber, r.newRowNumber])).toEqual([
+      [2, 2],
+      [3, 3],
+      [4, 4],
     ]);
   });
 

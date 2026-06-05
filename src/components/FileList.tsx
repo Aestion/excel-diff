@@ -34,6 +34,93 @@ function matchWildcard(text: string, pattern: string): boolean {
 
 type FilterMode = "all" | "different" | "same" | "left-only" | "right-only";
 
+interface FileTreeNode {
+  name: string;
+  path: string;
+  files: FilePair[];
+  children: FileTreeNode[];
+  totalFiles: number;
+  differentFiles: number;
+  onlySideFiles: number;
+}
+
+function splitRelativePath(path: string): string[] {
+  return path.split(/[\\/]+/).filter(Boolean);
+}
+
+function getFolderPaths(relativePath: string): string[] {
+  const parts = splitRelativePath(relativePath);
+  const folders: string[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    folders.push(parts.slice(0, i).join("\\"));
+  }
+  return folders;
+}
+
+function buildFileTree(pairs: FilePair[]): FileTreeNode {
+  const root: FileTreeNode = {
+    name: "",
+    path: "",
+    files: [],
+    children: [],
+    totalFiles: 0,
+    differentFiles: 0,
+    onlySideFiles: 0,
+  };
+  const nodeMap = new Map<string, FileTreeNode>([["", root]]);
+
+  const ensureNode = (path: string, name: string, parentPath: string) => {
+    const existing = nodeMap.get(path);
+    if (existing) return existing;
+    const node: FileTreeNode = {
+      name,
+      path,
+      files: [],
+      children: [],
+      totalFiles: 0,
+      differentFiles: 0,
+      onlySideFiles: 0,
+    };
+    nodeMap.set(path, node);
+    nodeMap.get(parentPath)?.children.push(node);
+    return node;
+  };
+
+  for (const pair of pairs) {
+    const parts = splitRelativePath(pair.relativePath);
+    let parentPath = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      const path = parts.slice(0, i + 1).join("\\");
+      ensureNode(path, parts[i], parentPath);
+      parentPath = path;
+    }
+    (nodeMap.get(parentPath) || root).files.push(pair);
+  }
+
+  const finalize = (node: FileTreeNode) => {
+    node.children.sort((a, b) => a.name.localeCompare(b.name));
+    node.files.sort((a, b) => a.filename.localeCompare(b.filename));
+
+    let totalFiles = node.files.length;
+    let differentFiles = node.files.filter(f => f.diffStatus === "different").length;
+    let onlySideFiles = node.files.filter(f => f.status === "old-only" || f.status === "new-only").length;
+
+    for (const child of node.children) {
+      finalize(child);
+      totalFiles += child.totalFiles;
+      differentFiles += child.differentFiles;
+      onlySideFiles += child.onlySideFiles;
+    }
+
+    node.totalFiles = totalFiles;
+    node.differentFiles = differentFiles;
+    node.onlySideFiles = onlySideFiles;
+  };
+
+  finalize(root);
+  return root;
+}
+
 // Context menu
 interface ContextMenuState {
   x: number;
@@ -92,91 +179,115 @@ function ContextMenu({ state, onAction, onClose }: {
   );
 }
 
-// Collapsible folder group
-function FolderGroup({ dir, files, side, selected, onSelect, onDoubleClick, onContextMenu, collapsed, onToggle }: {
-  dir: string;
-  files: FilePair[];
+function TreeFileRow({ pair, side, level, selected, onSelect, onDoubleClick, onContextMenu }: {
+  pair: FilePair;
   side: "left" | "right";
+  level: number;
   selected: Set<string>;
   onSelect: (path: string, e: React.MouseEvent) => void;
   onDoubleClick: (pair: FilePair) => void;
-  onContextMenu: (e: React.MouseEvent, side: "left" | "right") => void;
-  collapsed: boolean;
-  onToggle: (dir: string) => void;
+  onContextMenu: (e: React.MouseEvent, side: "left" | "right", path?: string) => void;
 }) {
-  const isRoot = dir === "";
-  const diffs = files.filter(f => f.diffStatus === "different").length;
-  const onlys = files.filter(f => f.status === "old-only" || f.status === "new-only").length;
   const getSize = (p: FilePair) => side === "left" ? p.oldSize : p.newSize;
   const getModifiedAt = (p: FilePair) => side === "left" ? p.oldModifiedAt : p.newModifiedAt;
+  const existsOnThisSide = side === "left"
+    ? pair.status !== "new-only"
+    : pair.status !== "old-only";
+  const paddingLeft = 8 + level * 16;
+
+  if (!existsOnThisSide) {
+    return (
+      <div key={`placeholder-${pair.relativePath}-${side}`}
+        className="flex items-center pr-4 h-7 border-b bg-gray-100 text-xs"
+        style={{ paddingLeft }}>
+        <span className="w-3 mr-1"></span>
+        <span className="flex-1 font-mono truncate text-gray-300">{pair.filename}</span>
+        <span className="w-20 ml-2 shrink-0"></span>
+        <span className="w-16 ml-2 shrink-0"></span>
+      </div>
+    );
+  }
+
+  const isOnly = pair.status === "old-only" || pair.status === "new-only";
+  const isDiff = pair.diffStatus === "different";
+  const isUnknown = pair.diffStatus === "unknown";
+  const isSelected = selected.has(pair.relativePath);
+  const bg = isSelected
+    ? "bg-blue-100"
+    : isOnly
+      ? "bg-gray-200"
+      : isDiff
+        ? "bg-red-50"
+        : isUnknown
+          ? "bg-yellow-50"
+          : "bg-white";
+  const modifiedAt = getModifiedAt(pair);
+
+  return (
+    <div key={pair.relativePath}
+      className={`flex items-center pr-4 h-7 border-b cursor-pointer text-xs ${bg} hover:brightness-95`}
+      style={{ paddingLeft }}
+      onClick={(e) => onSelect(pair.relativePath, e)}
+      onDoubleClick={() => onDoubleClick(pair)}
+      onContextMenu={(e) => onContextMenu(e, side, pair.relativePath)}>
+      <span className="w-3 mr-1">
+        {isSelected && <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-600" />}
+      </span>
+      <span className="flex-1 font-mono truncate">{pair.filename}</span>
+      <span className="text-gray-400 ml-2 w-20 text-right shrink-0 font-mono">{formatModifiedAt(modifiedAt)}</span>
+      <span className="text-gray-400 ml-2 w-16 text-right shrink-0">{formatSize(getSize(pair))}</span>
+    </div>
+  );
+}
+
+function TreeFolderNode({ node, side, level, selected, onSelect, onDoubleClick, onContextMenu, collapsedFolders, onToggle }: {
+  node: FileTreeNode;
+  side: "left" | "right";
+  level: number;
+  selected: Set<string>;
+  onSelect: (path: string, e: React.MouseEvent) => void;
+  onDoubleClick: (pair: FilePair) => void;
+  onContextMenu: (e: React.MouseEvent, side: "left" | "right", path?: string) => void;
+  collapsedFolders: Set<string>;
+  onToggle: (dir: string) => void;
+}) {
+  const isRoot = node.path === "";
+  const collapsed = !isRoot && collapsedFolders.has(node.path);
+  const paddingLeft = 8 + level * 16;
 
   return (
     <div>
       {!isRoot && (
-        <div className="flex items-center px-2 h-7 bg-gray-50 border-b cursor-pointer hover:bg-gray-100 select-none"
-          onClick={() => onToggle(dir)}>
+        <div className="flex items-center pr-2 h-7 bg-gray-50 border-b cursor-pointer hover:bg-gray-100 select-none"
+          style={{ paddingLeft }}
+          onClick={() => onToggle(node.path)}>
           <span className={`transform transition-transform ${collapsed ? "" : "rotate-90"}`}>
             <ChevronDown size={12} className="text-gray-400" />
           </span>
           <FolderIcon size={13} className="text-amber-500 mx-1" />
-          <span className="text-xs font-medium text-gray-600 flex-1 truncate">{dir}</span>
+          <span className="text-xs font-medium text-gray-600 flex-1 truncate">{node.name}</span>
           <span className="text-[10px] text-gray-400 ml-2">
-            {files.length}文件
-            {diffs > 0 && <span className="text-red-500 ml-1">{diffs}不同</span>}
-            {onlys > 0 && <span className="text-gray-500 ml-1">{onlys}仅一侧</span>}
+            {node.totalFiles}文件
+            {node.differentFiles > 0 && <span className="text-red-500 ml-1">{node.differentFiles}不同</span>}
+            {node.onlySideFiles > 0 && <span className="text-gray-500 ml-1">{node.onlySideFiles}仅一侧</span>}
           </span>
         </div>
       )}
-      {(!collapsed || isRoot) && files.map(pair => {
-        // Check if file exists on this side
-        const existsOnThisSide = side === "left"
-          ? pair.status !== "new-only"
-          : pair.status !== "old-only";
-
-        // If file doesn't exist on this side, show empty placeholder row
-        if (!existsOnThisSide) {
-          return (
-            <div key={`placeholder-${pair.relativePath}-${side}`}
-              className="flex items-center pl-8 pr-4 h-7 border-b bg-gray-100 text-xs">
-              <span className="w-3 mr-1"></span>
-              <span className="flex-1 font-mono truncate text-gray-300">{pair.filename}</span>
-              <span className="w-20 ml-2 shrink-0"></span>
-              <span className="w-16 ml-2 shrink-0"></span>
-            </div>
-          );
-        }
-
-        const isOnly = pair.status === "old-only" || pair.status === "new-only";
-        const isDiff = pair.diffStatus === "different";
-        const isUnknown = pair.diffStatus === "unknown";
-        const isSelected = selected.has(pair.relativePath);
-        const bg = isSelected
-          ? "bg-blue-100"
-          : isOnly
-            ? "bg-gray-200"
-            : isDiff
-              ? "bg-red-50"
-              : isUnknown
-                ? "bg-yellow-50"
-                : "bg-white";
-        const fileName = isRoot ? pair.relativePath : pair.relativePath.substring(dir.length + 1);
-        const modifiedAt = getModifiedAt(pair);
-
-        return (
-          <div key={pair.relativePath}
-            className={`flex items-center pl-8 pr-4 h-7 border-b cursor-pointer text-xs ${bg} hover:brightness-95`}
-            onClick={(e) => onSelect(pair.relativePath, e)}
-            onDoubleClick={() => onDoubleClick(pair)}
-            onContextMenu={(e) => onContextMenu(e, side)}>
-            <span className="w-3 mr-1">
-              {isSelected && <span className="text-blue-600">●</span>}
-            </span>
-            <span className="flex-1 font-mono truncate">{fileName}</span>
-            <span className="text-gray-400 ml-2 w-20 text-right shrink-0 font-mono">{formatModifiedAt(modifiedAt)}</span>
-            <span className="text-gray-400 ml-2 w-16 text-right shrink-0">{formatSize(getSize(pair))}</span>
-          </div>
-        );
-      })}
+      {(!collapsed || isRoot) && (
+        <>
+          {node.children.map(child => (
+            <TreeFolderNode key={child.path} node={child} side={side} level={isRoot ? level : level + 1}
+              selected={selected} onSelect={onSelect}
+              onDoubleClick={onDoubleClick} onContextMenu={onContextMenu}
+              collapsedFolders={collapsedFolders} onToggle={onToggle} />
+          ))}
+          {node.files.map(pair => (
+            <TreeFileRow key={pair.relativePath} pair={pair} side={side} level={isRoot ? level : level + 1}
+              selected={selected} onSelect={onSelect}
+              onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} />
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -209,14 +320,7 @@ export default function FileList() {
   const allFolders = useMemo(() => {
     const folders = new Set<string>();
     for (const pair of filePairs) {
-      let path = pair.relativePath;
-      let lastSlash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-      while (lastSlash > 0) {
-        const dir = path.substring(0, lastSlash);
-        folders.add(dir);
-        path = dir;
-        lastSlash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-      }
+      getFolderPaths(pair.relativePath).forEach((folder) => folders.add(folder));
     }
     return folders;
   }, [filePairs]);
@@ -269,21 +373,8 @@ export default function FileList() {
     return result;
   }, [filePairs, filter, filenameFilter]);
 
-  // Group by dir — unified: ALL files from both sides, so rows stay aligned
-  const groupFiles = (pairs: FilePair[]) => {
-    const map = new Map<string, FilePair[]>();
-    for (const p of pairs) {
-      const lastSlash = Math.max(p.relativePath.lastIndexOf("/"), p.relativePath.lastIndexOf("\\"));
-      const dir = lastSlash > 0 ? p.relativePath.substring(0, lastSlash) : "";
-      const list = map.get(dir) || [];
-      list.push(p);
-      map.set(dir, list);
-    }
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  };
-
-  // Single unified groups — includes old-only, new-only, and matched files
-  const unifiedGroups = useMemo(() => groupFiles(filteredPairs), [filteredPairs]);
+  // Single unified tree includes old-only, new-only, and matched files.
+  const fileTree = useMemo(() => buildFileTree(filteredPairs), [filteredPairs]);
 
   // Refresh
   const handleRefresh = useCallback(async () => {
@@ -396,7 +487,7 @@ export default function FileList() {
     requestAnimationFrame(() => {
       syncingScrollRef.current = false;
     });
-  }, [fileListScrollTop, unifiedGroups]);
+  }, [fileListScrollTop, fileTree]);
 
   // Refs for latest values (avoid stale closures in keyboard handler)
   const handleRefreshRef = useRef(handleRefresh);
@@ -411,10 +502,18 @@ export default function FileList() {
   filePairsRef.current = filePairs;
 
   // Right click → context menu
-  const handleContextMenu = useCallback((e: React.MouseEvent, side: "left" | "right") => {
+  const handleContextMenu = useCallback((e: React.MouseEvent, side: "left" | "right", path?: string) => {
     e.preventDefault();
-    // If right-clicked item is not in selection, select it only
-    const paths = selectedPaths.size > 0 ? Array.from(selectedPaths) : [];
+    const paths = path && !selectedPaths.has(path)
+      ? [path]
+      : selectedPaths.size > 0
+        ? Array.from(selectedPaths)
+        : path
+          ? [path]
+          : [];
+    if (path && !selectedPaths.has(path)) {
+      setSelectedPaths(new Set([path]));
+    }
     setContextMenu({ x: e.clientX, y: e.clientY, side, paths });
   }, [selectedPaths]);
 
@@ -440,28 +539,41 @@ export default function FileList() {
       if (!window.confirm(`确认将 ${matchedPairs.length} 个文件 ${dirLabel} 覆盖？`)) return;
 
       setMerging(true);
+      const mergedPaths: string[] = [];
       let ok = 0, fail = 0;
-      for (const pair of matchedPairs) {
-        const src = action === "copy-left-to-right" ? pair.oldPath : pair.newPath;
-        const dst = action === "copy-left-to-right" ? pair.newPath : pair.oldPath;
-        if (!src || !dst) continue;
-        setMergeProgress(`${pair.relativePath} (${ok + fail + 1}/${matchedPairs.length})`);
-        try {
+      const MERGE_CONCURRENCY = 4;
+      for (let start = 0; start < matchedPairs.length; start += MERGE_CONCURRENCY) {
+        const batch = matchedPairs.slice(start, start + MERGE_CONCURRENCY);
+        setMergeProgress(`${start + 1}-${Math.min(start + batch.length, matchedPairs.length)}/${matchedPairs.length}`);
+        const results = await Promise.allSettled(batch.map(async (pair) => {
+          const src = action === "copy-left-to-right" ? pair.oldPath : pair.newPath;
+          const dst = action === "copy-left-to-right" ? pair.newPath : pair.oldPath;
+          if (!src || !dst) throw new Error("missing source or destination");
           const wb = await readExcel(src);
           await writeExcel(dst, wb.sheets);
-          useDiffStore.getState().markFileAsIdentical(pair.relativePath);
-          ok++;
-        } catch { fail++; }
+          return pair.relativePath;
+        }));
+        for (const result of results) {
+          if (result.status === "fulfilled") {
+            mergedPaths.push(result.value);
+            ok++;
+          } else {
+            fail++;
+          }
+        }
       }
       setMerging(false); setMergeProgress("");
-      // Update file pairs directly instead of re-verifying (avoids overwriting markFileAsIdentical)
-      useDiffStore.getState().setFilePairs(
-        useDiffStore.getState().filePairs.map(p =>
-          matchedPairs.some(mp => mp.relativePath === p.relativePath)
-            ? { ...p, diffStatus: "identical" as const }
-            : p
-        )
-      );
+      const store = useDiffStore.getState();
+      if (store.oldDir) {
+        try { store.setOldFiles(await listExcelFiles(store.oldDir)); } catch {}
+      }
+      if (store.newDir) {
+        try { store.setNewFiles(await listExcelFiles(store.newDir)); } catch {}
+      }
+      await store.buildFilePairs();
+      for (const relativePath of mergedPaths) {
+        await useDiffStore.getState().verifyFilePair(relativePath, true);
+      }
       setSelectedPaths(new Set());
       alert(`合并完成！成功: ${ok}, 失败: ${fail}`);
     }
@@ -564,12 +676,10 @@ export default function FileList() {
             <span className="w-20 text-right">修改时间</span>
             <span className="w-16 text-right ml-2">大小</span>
           </div>
-          {unifiedGroups.map(([dir, files]) => (
-            <FolderGroup key={dir} dir={dir} files={files} side="left"
-              selected={selectedPaths} onSelect={handleSelect}
-              onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
-              collapsed={fileListCollapsedFolders.has(dir)} onToggle={toggleFolder} />
-          ))}
+          <TreeFolderNode node={fileTree} side="left" level={0}
+            selected={selectedPaths} onSelect={handleSelect}
+            onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
+            collapsedFolders={fileListCollapsedFolders} onToggle={toggleFolder} />
         </div>
 
         {/* Right */}
@@ -585,12 +695,10 @@ export default function FileList() {
             <span className="w-20 text-right">修改时间</span>
             <span className="w-16 text-right ml-2">大小</span>
           </div>
-          {unifiedGroups.map(([dir, files]) => (
-            <FolderGroup key={dir} dir={dir} files={files} side="right"
-              selected={selectedPaths} onSelect={handleSelect}
-              onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
-              collapsed={fileListCollapsedFolders.has(dir)} onToggle={toggleFolder} />
-          ))}
+          <TreeFolderNode node={fileTree} side="right" level={0}
+            selected={selectedPaths} onSelect={handleSelect}
+            onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
+            collapsedFolders={fileListCollapsedFolders} onToggle={toggleFolder} />
         </div>
       </div>
 

@@ -110,14 +110,9 @@ pub fn write_workbook(
 }
 
 fn try_write_with_fallback(file_path: &str, json_path: &str) -> Result<(), String> {
-    // Try xlwings first if engine is Xlwings
     if current_engine() == ExcelEngine::Xlwings {
-        if let Ok(script) = find_write_script_xlwings() {
-            if try_write(&script, file_path, json_path).is_ok() {
-                return Ok(());
-            }
-        }
-        // Fallback to openpyxl on any xlwings failure
+        let script = find_write_script_xlwings()?;
+        return try_write(&script, file_path, json_path);
     }
 
     let script = find_write_script()?;

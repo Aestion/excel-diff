@@ -6,7 +6,24 @@ function serializeCellValue(v: CellValue): string {
   if (typeof v === "number") {
     return String(v);
   }
-  return String(v);
+  return normalizeTextValue(String(v));
+}
+
+export function normalizeTextValue(value: string): string {
+  return value
+    .replace(/_x005F_x000D__x000D_\r\n/gi, "_x000D_\n")
+    .replace(/_x005F_x000D__x000D_\r/gi, "_x000D_\n")
+    .replace(/_x005F_x000D__x000D_\n/gi, "_x000D_\n")
+    .replace(/_x005F_x000A__x000A_\r\n/gi, "_x000A_\n")
+    .replace(/_x005F_x000A__x000A_\r/gi, "_x000A_\n")
+    .replace(/_x005F_x000A__x000A_\n/gi, "_x000A_\n")
+    .replace(/_x005F_x000D__x000D_/gi, "_x000D_\n")
+    .replace(/_x005F_x000A__x000A_/gi, "_x000A_\n")
+    .replace(/_x005F_x000D_/gi, "_x000D_")
+    .replace(/_x005F_x000A_/gi, "_x000A_")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/_x005F_/gi, "_");
 }
 
 export function buildKey(row: Row, keyColumns: number[]): RowKey {
@@ -15,11 +32,29 @@ export function buildKey(row: Row, keyColumns: number[]): RowKey {
   );
 }
 
+function cellSignature(cell: CellData | undefined): string {
+  const rawValue = cell?.value ?? null;
+  const value = typeof rawValue === "string" ? normalizeTextValue(rawValue) : rawValue;
+  const formula = cell?.formula ?? null;
+  return JSON.stringify([value, formula]);
+}
+
+function rowSignature(row: Row): string {
+  let lastNonEmpty = row.length - 1;
+  while (lastNonEmpty >= 0 && cellDataEqual(row[lastNonEmpty], undefined)) {
+    lastNonEmpty--;
+  }
+  return JSON.stringify(row.slice(0, lastNonEmpty + 1).map(cellSignature));
+}
+
 function cellValuesEqual(a: CellValue, b: CellValue): boolean {
   if (a === b) return true;
   if (a === null && b === "") return true;
   if (a === "" && b === null) return true;
   if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) < 1e-10;
+  if (typeof a === "string" && typeof b === "string") {
+    return normalizeTextValue(a) === normalizeTextValue(b);
+  }
   return false;
 }
 
@@ -81,15 +116,23 @@ export function computeDiff(
   }
 
   const newByKey = new Map<RowKey, number[]>();
+  const newSignatureByIndex = new Map<number, string>();
   for (let i = 1; i < newSheet.rows.length; i++) {
     const key = buildKey(newSheet.rows[i], keyColumnIndices);
     const list = newByKey.get(key) || [];
     list.push(i);
     newByKey.set(key, list);
+    newSignatureByIndex.set(i, rowSignature(newSheet.rows[i]));
   }
 
   const consumedOld = new Set<number>();
   const consumedNew = new Set<number>();
+  const duplicateKeySet = new Set<RowKey>();
+  for (const key of new Set([...oldByKey.keys(), ...newByKey.keys()])) {
+    const oldCount = oldByKey.get(key)?.length ?? 0;
+    const newCount = newByKey.get(key)?.length ?? 0;
+    if (oldCount > 1 || newCount > 1) duplicateKeySet.add(key);
+  }
 
   const diffRows: DiffRow[] = [];
   let viewIndex = 0;
@@ -104,15 +147,32 @@ export function computeDiff(
     let matchedCellDiffs: CellDiff[] | null = null;
 
     if (newList) {
-      let bestScore = Number.POSITIVE_INFINITY;
+      const oldSignature = rowSignature(oldRow);
+      let bestExactDistance = Number.POSITIVE_INFINITY;
       for (const ni of newList) {
-        if (!consumedNew.has(ni)) {
-          const candidateDiffs = compareRows(oldRow, newSheet.rows[ni]);
-          if (candidateDiffs.length < bestScore) {
+        if (!consumedNew.has(ni) && newSignatureByIndex.get(ni) === oldSignature) {
+          const distance = Math.abs(ni - i);
+          if (distance < bestExactDistance) {
             matchedNewIdx = ni;
-            matchedCellDiffs = candidateDiffs;
-            bestScore = candidateDiffs.length;
-            if (bestScore === 0) break;
+            bestExactDistance = distance;
+          }
+          matchedCellDiffs = [];
+        }
+      }
+
+      let bestScore = Number.POSITIVE_INFINITY;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      if (matchedNewIdx === null) {
+        for (const ni of newList) {
+          if (!consumedNew.has(ni)) {
+            const candidateDiffs = compareRows(oldRow, newSheet.rows[ni]);
+            const distance = Math.abs(ni - i);
+            if (candidateDiffs.length < bestScore || (candidateDiffs.length === bestScore && distance < bestDistance)) {
+              matchedNewIdx = ni;
+              matchedCellDiffs = candidateDiffs;
+              bestScore = candidateDiffs.length;
+              bestDistance = distance;
+            }
           }
         }
       }
@@ -133,6 +193,7 @@ export function computeDiff(
         newRow,
         cellDiffs,
         isOverridden: false,
+        hasDuplicateKey: duplicateKeySet.has(key),
       });
     } else {
       consumedOld.add(i);
@@ -146,6 +207,7 @@ export function computeDiff(
         newRow: null,
         cellDiffs: [],
         isOverridden: false,
+        hasDuplicateKey: duplicateKeySet.has(key),
       });
     }
   }
@@ -165,8 +227,15 @@ export function computeDiff(
       newRow,
       cellDiffs: [],
       isOverridden: false,
+      hasDuplicateKey: duplicateKeySet.has(key),
     });
   }
+
+  const duplicateKeys = Array.from(duplicateKeySet).map((key) => ({
+    key,
+    oldCount: oldByKey.get(key)?.length ?? 0,
+    newCount: newByKey.get(key)?.length ?? 0,
+  }));
 
   const stats = {
     totalOld: oldSheet.rows.length - 1,
@@ -177,5 +246,5 @@ export function computeDiff(
     modified: diffRows.filter((r) => r.status === "modified").length,
   };
 
-  return { keyColumnIndices, diffRows, stats };
+  return { keyColumnIndices, diffRows, duplicateKeys, stats };
 }

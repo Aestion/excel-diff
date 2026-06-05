@@ -1,31 +1,9 @@
 import { create } from "zustand";
 import type { CellValue, FileEntry, FilePair, ParsedWorkbook, Row } from "../types/excel";
 import type { DiffResult } from "../types/diff";
-import { cellDataEqual } from "../utils/diffEngine";
+import { workbooksEqual } from "../utils/workbookCompare";
 
 type ViewMode = "directory" | "diff";
-
-// Compare rows with the same semantics as the row-level diff engine.
-function rowsEqual(a: Row[], b: Row[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i].length !== b[i].length) return false;
-    for (let j = 0; j < a[i].length; j++) {
-      if (!cellDataEqual(a[i][j], b[i][j])) return false;
-    }
-  }
-  return true;
-}
-
-function workbooksEqual(a: ParsedWorkbook, b: ParsedWorkbook): boolean {
-  if (a.sheetNames.length !== b.sheetNames.length) return false;
-  for (const sheetName of a.sheetNames) {
-    const oldSheet = a.sheets.find((s) => s.name === sheetName);
-    const newSheet = b.sheets.find((s) => s.name === sheetName);
-    if (!oldSheet || !newSheet || !rowsEqual(oldSheet.rows, newSheet.rows)) return false;
-  }
-  return true;
-}
 
 interface DiffState {
   currentView: ViewMode;
@@ -215,19 +193,9 @@ export const useDiffStore = create<DiffState>((set, get) => ({
           if (oldCache && newCache
             && oldCache.size === p.oldSize && oldCache.modified === p.oldModifiedAt
             && newCache.size === p.newSize && newCache.modified === p.newModifiedAt) {
-            let allSame = true;
-            for (const sheetName of oldCache.data.sheetNames) {
-              const oldSheet = oldCache.data.sheets.find((s) => s.name === sheetName);
-              const newSheet = newCache.data.sheets.find((s) => s.name === sheetName);
-              if (!newSheet) { allSame = false; break; }
-              if (!rowsEqual(oldSheet!.rows, newSheet.rows)) {
-                allSame = false; break;
-              }
-            }
             return {
               index: i,
-              diffStatus: (allSame && oldCache.data.sheetNames.length === newCache.data.sheetNames.length)
-                ? "identical" as const : "different" as const,
+              diffStatus: workbooksEqual(oldCache.data, newCache.data) ? "identical" as const : "different" as const,
             };
           }
 
@@ -248,19 +216,9 @@ export const useDiffStore = create<DiffState>((set, get) => ({
           cache.set(p.oldPath!, { data: oldWb, size: p.oldSize, modified: p.oldModifiedAt! });
           cache.set(p.newPath!, { data: newWb, size: p.newSize, modified: p.newModifiedAt! });
 
-          let allSame = true;
-          for (const sheetName of oldWb.sheetNames) {
-            const oldSheet = oldWb.sheets.find((s) => s.name === sheetName);
-            const newSheet = newWb.sheets.find((s) => s.name === sheetName);
-            if (!newSheet) { allSame = false; break; }
-            if (!rowsEqual(oldSheet!.rows, newSheet.rows)) {
-              allSame = false; break;
-            }
-          }
           return {
             index: i,
-            diffStatus: (allSame && oldWb.sheetNames.length === newWb.sheetNames.length)
-              ? "identical" as const : "different" as const,
+            diffStatus: workbooksEqual(oldWb, newWb) ? "identical" as const : "different" as const,
           };
         })
       );

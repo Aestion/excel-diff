@@ -22,11 +22,19 @@ export interface DiffRow {
   newRow: Row | null;
   cellDiffs: CellDiff[];
   isOverridden: boolean;
+  hasDuplicateKey?: boolean;
+}
+
+export interface DuplicateKeyInfo {
+  key: RowKey;
+  oldCount: number;
+  newCount: number;
 }
 
 export interface DiffResult {
   keyColumnIndices: number[];
   diffRows: DiffRow[];
+  duplicateKeys?: DuplicateKeyInfo[];
   stats: {
     totalOld: number;
     totalNew: number;

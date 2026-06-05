@@ -2,20 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Beyond Compare style colors */
-
-/* Added row: light green (BC: files only on right side) */
+/* Diff row colors */
 .ag-theme-alpine .row-added {
-  background-color: #e6ffe6 !important;
+  background-color: #fff0f0 !important;
 }
 
-/* Deleted row: light gray (BC: files only on left side) */
 .ag-theme-alpine .row-deleted {
-  background-color: #f0f0f0 !important;
-  color: #999;
+  background-color: #fff0f0 !important;
 }
 
-/* Modified row: light red/pink (BC: files differ) */
 .ag-theme-alpine .row-modified {
   background-color: #fff0f0 !important;
 }
@@ -24,6 +19,17 @@
 .ag-theme-alpine .cell-modified {
   background-color: #ffcccc !important;
   font-weight: 600;
+}
+
+/* Duplicate key marker */
+.ag-theme-alpine .row-duplicate-key {
+  box-shadow: inset 3px 0 0 #f59e0b;
+}
+
+/* Current diff jump target */
+.ag-theme-alpine .row-active-diff {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
 }
 
 /* Search match highlight */
@@ -56,4 +62,11 @@
 /* Header checkbox */
 .ag-theme-alpine .ag-header-select-all {
   margin: 0;
+}
+
+/* DiffView single-scroll-source mode: follower grid scrollbars are driven by the master grid. */
+.diff-grid-follower .ag-body-vertical-scroll,
+.diff-grid-follower .ag-body-horizontal-scroll {
+  visibility: hidden;
+  pointer-events: none;
 }
