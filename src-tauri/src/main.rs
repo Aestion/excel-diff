@@ -9,6 +9,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::list_excel_files,
             commands::hash_files,
+            commands::copy_excel_file,
             commands::read_excel,
             commands::write_excel,
             commands::write_excel_changes,

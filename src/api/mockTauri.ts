@@ -88,6 +88,15 @@ export async function writeExcel(filePath: string, sheets: SheetData[]): Promise
   }
 }
 
+export async function copyExcelFile(sourcePath: string, targetPath: string): Promise<void> {
+  await delay(50);
+  console.log("[MOCK] Copied workbook:", sourcePath, "->", targetPath);
+  const sourceWorkbook = _savedWorkbooks.get(sourcePath);
+  if (sourceWorkbook) {
+    _savedWorkbooks.set(targetPath, { ...sourceWorkbook, filePath: targetPath });
+  }
+}
+
 export async function writeExcelChanges(filePath: string, changesJson: string): Promise<void> {
   await delay(200);
   console.log("[MOCK] Wrote changes to:", filePath, changesJson.substring(0, 100));

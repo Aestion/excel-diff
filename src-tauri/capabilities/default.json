@@ -7,6 +7,14 @@
     "core:default",
     "fs:allow-app-read-recursive",
     "fs:allow-app-write-recursive",
+    "fs:allow-copy-file",
+    "fs:allow-read",
+    "fs:allow-write",
+    {
+      "identifier": "fs:scope",
+      "allow": ["**"],
+      "deny": []
+    },
     "fs:allow-document-read-recursive",
     "fs:allow-desktop-read-recursive",
     "fs:allow-home-read-recursive",

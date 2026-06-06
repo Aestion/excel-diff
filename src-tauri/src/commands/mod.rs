@@ -109,32 +109,62 @@ pub fn hash_files(file_paths: Vec<String>) -> Result<Vec<FileHash>, String> {
 }
 
 #[command]
+pub async fn copy_excel_file(source_path: String, target_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = Path::new(&source_path);
+        let target = Path::new(&target_path);
+        if !source.is_file() {
+            return Err(format!("源文件不存在: {}", source_path));
+        }
+        if let Some(parent) = target.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("创建目标目录失败: {}", e))?;
+            }
+        }
+        fs::copy(source, target)
+            .map(|_| ())
+            .map_err(|e| format!("复制文件失败: {}", e))
+    })
+    .await
+    .map_err(|e| format!("复制任务失败: {}", e))?
+}
+
+#[command]
 pub fn read_excel(file_path: String) -> Result<ParsedWorkbook, String> {
     excel::reader::read_workbook(&file_path)
 }
 
 #[command]
-pub fn write_excel(
+pub async fn write_excel(
     file_path: String,
     sheets: Vec<SheetData>,
 ) -> Result<(), String> {
-    // Ensure parent directory exists
-    if let Some(parent) = Path::new(&file_path).parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("创建目录失败: {}", e))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // Ensure parent directory exists
+        if let Some(parent) = Path::new(&file_path).parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("创建目录失败: {}", e))?;
+            }
         }
-    }
-    excel::writer::write_workbook(&file_path, &sheets)
+        excel::writer::write_workbook(&file_path, &sheets)
+    })
+    .await
+    .map_err(|e| format!("写入任务失败: {}", e))?
 }
 
 #[command]
-pub fn write_excel_changes(
+pub async fn write_excel_changes(
     file_path: String,
     changes_json: String,
 ) -> Result<(), String> {
-    // Pass changes JSON directly to Python script
-    excel::writer::write_changes(&file_path, &changes_json)
+    tauri::async_runtime::spawn_blocking(move || {
+        // Pass changes JSON directly to Python script
+        excel::writer::write_changes(&file_path, &changes_json)
+    })
+    .await
+    .map_err(|e| format!("写入任务失败: {}", e))?
 }
 
 #[command]

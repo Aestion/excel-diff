@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { copyFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import type { FileEntry, ParsedWorkbook, SheetData } from "../types/excel";
 import * as mock from "./mockTauri";
 
@@ -74,6 +74,31 @@ export async function hashFiles(filePaths: string[]): Promise<Array<{ path: stri
     () => invoke("hash_files", { filePaths }),
     () => mock.hashFiles(filePaths)
   );
+}
+
+export async function copyExcelFile(sourcePath: string, targetPath: string): Promise<void> {
+  try {
+    await copyFile(sourcePath, targetPath);
+  } catch (e: any) {
+    const message = String(e?.message ?? e ?? "");
+    if (!message.includes("window.__TAURI__") && !message.includes("undefined") && !message.includes("plugin")) {
+      try {
+        await invoke("copy_excel_file", { sourcePath, targetPath });
+        return;
+      } catch (invokeError: any) {
+        const invokeMessage = String(invokeError?.message ?? invokeError ?? "");
+        if (!invokeMessage.includes("Command not found") && !invokeMessage.includes("copy_excel_file")) {
+          throw invokeError;
+        }
+      }
+    }
+    if (message.includes("window.__TAURI__") || message.includes("undefined") || message.includes("plugin")) {
+      await mock.copyExcelFile(sourcePath, targetPath);
+      return;
+    }
+    const workbook = await readExcel(sourcePath);
+    await writeExcel(targetPath, workbook.sheets);
+  }
 }
 
 export async function writeExcel(

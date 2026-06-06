@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useDiffStore } from "../stores/diffStore";
-import { readExcel, detectKeyColumns, writeExcel, listExcelFiles } from "../api/tauri";
+import { readExcel, detectKeyColumns, copyExcelFile, listExcelFiles } from "../api/tauri";
 import { computeDiff } from "../utils/diffEngine";
 import type { FilePair } from "../types/excel";
 import { RefreshIcon, ArrowRight, ArrowLeft, SpinnerIcon, FolderIcon, ChevronDown } from "./Icons";
@@ -535,8 +535,6 @@ export default function FileList() {
         .filter((p): p is FilePair => !!p && p.status === "matched");
 
       if (matchedPairs.length === 0) return;
-      const dirLabel = action === "copy-left-to-right" ? "左→右" : "右→左";
-      if (!window.confirm(`确认将 ${matchedPairs.length} 个文件 ${dirLabel} 覆盖？`)) return;
 
       setMerging(true);
       const mergedPaths: string[] = [];
@@ -549,8 +547,7 @@ export default function FileList() {
           const src = action === "copy-left-to-right" ? pair.oldPath : pair.newPath;
           const dst = action === "copy-left-to-right" ? pair.newPath : pair.oldPath;
           if (!src || !dst) throw new Error("missing source or destination");
-          const wb = await readExcel(src);
-          await writeExcel(dst, wb.sheets);
+          await copyExcelFile(src, dst);
           return pair.relativePath;
         }));
         for (const result of results) {
@@ -562,20 +559,28 @@ export default function FileList() {
           }
         }
       }
-      setMerging(false); setMergeProgress("");
       const store = useDiffStore.getState();
-      if (store.oldDir) {
-        try { store.setOldFiles(await listExcelFiles(store.oldDir)); } catch {}
-      }
-      if (store.newDir) {
-        try { store.setNewFiles(await listExcelFiles(store.newDir)); } catch {}
-      }
-      await store.buildFilePairs();
       for (const relativePath of mergedPaths) {
-        await useDiffStore.getState().verifyFilePair(relativePath, true);
+        store.markFileAsIdentical(relativePath);
       }
+      setMerging(false); setMergeProgress("");
       setSelectedPaths(new Set());
-      alert(`合并完成！成功: ${ok}, 失败: ${fail}`);
+      alert(`覆盖完成：成功 ${ok}，失败 ${fail}`);
+      window.setTimeout(() => {
+        void (async () => {
+          const latestStore = useDiffStore.getState();
+          if (latestStore.oldDir) {
+            try { latestStore.setOldFiles(await listExcelFiles(latestStore.oldDir)); } catch {}
+          }
+          if (latestStore.newDir) {
+            try { latestStore.setNewFiles(await listExcelFiles(latestStore.newDir)); } catch {}
+          }
+          await latestStore.buildFilePairs();
+          for (const relativePath of mergedPaths) {
+            await useDiffStore.getState().verifyFilePair(relativePath, true);
+          }
+        })();
+      }, 0);
     }
   }, [contextMenu, filePairs, handleOpen]);
 
