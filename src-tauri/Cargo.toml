@@ -2,14 +2,14 @@
 name = "excel-diff"
 version = "0.1.0"
 edition = "2021"
-default-run = "excel-diff"
+default-run = "ExcelDiff"
 
 [[bin]]
-name = "excel-diff"
+name = "ExcelDiff"
 path = "src/main.rs"
 
 [[bin]]
-name = "excel-diff-cli"
+name = "ExcelDiffCli"
 path = "src/cli.rs"
 
 [build-dependencies]
