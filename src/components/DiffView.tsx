@@ -34,6 +34,30 @@ type SheetSummary = {
 };
 
 type CopyMode = "all" | "added" | "modified";
+type RowContextMenuState = {
+  side: "old" | "new";
+  rowRef: string;
+  x: number;
+  y: number;
+};
+
+type DetailField = {
+  index: number;
+  name: string;
+  oldText: string;
+  newText: string;
+  isDifferent: boolean;
+};
+
+type DetailEditState = {
+  side: "old" | "new";
+  rowRef: string;
+  columnIndex: number;
+  value: string;
+};
+
+const RIGHT_ROWS_SNAPSHOT = -10;
+const LEFT_ROWS_SNAPSHOT = -11;
 
 function shouldCopyLeftToRight(row: DiffRow, mode: CopyMode): boolean {
   if (mode === "added") return row.status === "deleted";
@@ -49,6 +73,30 @@ function shouldCopyRightToLeft(row: DiffRow, mode: CopyMode): boolean {
 
 function uniqueRowRefs(...groups: string[][]): string[] {
   return Array.from(new Set(groups.flat()));
+}
+
+function formatDetailCell(cell: CellData | undefined): string {
+  if (!cell || cell.value === null || cell.value === undefined || cell.value === "") {
+    return cell?.formula ? `公式: ${cell.formula}` : "";
+  }
+  const valueText = String(cell.value);
+  return cell.formula ? `${valueText}\n公式: ${cell.formula}` : valueText;
+}
+
+function cellValueToEditText(cell: CellData | undefined): string {
+  if (cell?.formula) return cell.formula;
+  if (cell?.value === null || cell?.value === undefined) return "";
+  return String(cell.value);
+}
+
+function parseEditedCellValue(value: string): { value: CellValue; formula?: string } {
+  if (value.startsWith("=")) return { value, formula: value };
+  if (value.trim() === "") return { value: null };
+  const numericValue = Number(value);
+  if (value.trim() !== "" && Number.isFinite(numericValue) && String(numericValue) === value.trim()) {
+    return { value: numericValue };
+  }
+  return { value };
 }
 
 const METRICS_UPDATE_INTERVAL_MS = 80;
@@ -75,6 +123,8 @@ export default function DiffView() {
 
   const [leftSelected, setLeftSelected] = useState<string[]>([]);
   const [rightSelected, setRightSelected] = useState<string[]>([]);
+  const [rowContextMenu, setRowContextMenu] = useState<RowContextMenuState | null>(null);
+  const [detailEdit, setDetailEdit] = useState<DetailEditState | null>(null);
   const [activeDiffRowRef, setActiveDiffRowRef] = useState<string | null>(null);
   const [diffJumpSignal, setDiffJumpSignal] = useState(0);
   const [filter, setFilter] = useState<"all" | "diff" | "same" | "duplicate">("all");
@@ -137,6 +187,12 @@ export default function DiffView() {
   const rightSelectedRef = useRef(rightSelected);
   const filterRef = useRef(filter);
   const navigateDiffRef = useRef<(dir: "next" | "prev") => void>(() => {});
+  const copyLeftToRightRef = useRef<(rowRefs: string[], mode?: CopyMode) => void>(() => {});
+  const copyRightToLeftRef = useRef<(rowRefs: string[], mode?: CopyMode) => void>(() => {});
+  const saveRightRef = useRef<() => void>(() => {});
+  const undoRef = useRef<() => void>(() => {});
+  const redoRef = useRef<() => void>(() => {});
+  const skipDetailCommitRef = useRef(false);
   const oldGridRef = useRef<DiffGridHandle>(null);
   const newGridRef = useRef<DiffGridHandle>(null);
   const metricsTimerRef = useRef<number | null>(null);
@@ -149,6 +205,24 @@ export default function DiffView() {
   leftSelectedRef.current = leftSelected;
   rightSelectedRef.current = rightSelected;
   filterRef.current = filter;
+
+  useEffect(() => {
+    if (!rowContextMenu) return;
+
+    const closeMenu = () => setRowContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("scroll", closeMenu, true);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("scroll", closeMenu, true);
+    };
+  }, [rowContextMenu]);
 
   // Initialize effective rows
   const prevSheetRef = useRef<string>("");
@@ -250,9 +324,9 @@ export default function DiffView() {
       // Shift+Enter in search : prev match
       if (e.key === "Enter" && e.shiftKey && ss && st) { e.preventDefault(); navigateMatch("prev"); }
       // Ctrl+→ : copy selected left → right
-      if (e.ctrlKey && e.key === "ArrowRight") { e.preventDefault(); handleCopyLeftToRight(selected); }
+      if (e.ctrlKey && e.key === "ArrowRight") { e.preventDefault(); copyLeftToRightRef.current(selected); }
       // Ctrl+← : copy selected right → left (swap + copy)
-      if (e.ctrlKey && e.key === "ArrowLeft") { e.preventDefault(); handleCopyRightToLeft(selected); }
+      if (e.ctrlKey && e.key === "ArrowLeft") { e.preventDefault(); copyRightToLeftRef.current(selected); }
       // Ctrl+G : next diff
       if (e.ctrlKey && !e.shiftKey && e.key === "g") { e.preventDefault(); navigateDiffRef.current("next"); }
       // Ctrl+Shift+G : prev diff
@@ -260,11 +334,11 @@ export default function DiffView() {
       // Ctrl+B : filter diffs
       if (e.ctrlKey && e.key === "b") { e.preventDefault(); setFilter((f) => f === "diff" ? "all" : "diff"); }
       // Ctrl+S : save
-      if (e.ctrlKey && e.key === "s") { e.preventDefault(); handleSaveRight(); }
+      if (e.ctrlKey && e.key === "s") { e.preventDefault(); saveRightRef.current(); }
       // Ctrl+Z : undo
-      if (e.ctrlKey && !e.shiftKey && e.key === "z") { e.preventDefault(); handleUndo(); }
+      if (e.ctrlKey && !e.shiftKey && e.key === "z") { e.preventDefault(); undoRef.current(); }
       // Ctrl+Y or Ctrl+Shift+Z : redo
-      if ((e.ctrlKey && e.key === "y") || (e.ctrlKey && e.shiftKey && e.key === "Z")) { e.preventDefault(); handleRedo(); }
+      if ((e.ctrlKey && e.key === "y") || (e.ctrlKey && e.shiftKey && e.key === "Z")) { e.preventDefault(); redoRef.current(); }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -465,6 +539,7 @@ export default function DiffView() {
       const rows = effectiveNewRowsRef.current;
       if (!dr || !rows || rowRefs.length === 0) return;
 
+      const originalRows = rows.map((r) => r.map((c) => ({ ...c })));
       const localRows = rows.map((r) => r.map((c) => ({ ...c })));
       const undoChanges: CellChange[] = [];
       const redoChanges: CellChange[] = [];
@@ -537,8 +612,9 @@ export default function DiffView() {
           }
         } else {
           // Row only on left → insert
-          undoChanges.push({ rowKey: key, rowRef, columnIndex: -1, value: null });
-          redoChanges.push({ rowKey: key, rowRef, columnIndex: -2, value: JSON.stringify(oldRow) });
+          const insertIdx = localRows.length;
+          undoChanges.push({ rowKey: key, rowRef, columnIndex: -1, value: null, formula: String(insertIdx) });
+          redoChanges.push({ rowKey: key, rowRef, columnIndex: -2, value: JSON.stringify(oldRow), formula: String(insertIdx) });
           localRows.push(oldRow.map((c) => ({ ...c })));
         }
         if (undoChanges.length > beforeChangeCount) copiedRows++;
@@ -552,6 +628,7 @@ export default function DiffView() {
     },
     [pushEdit, setEffectiveNewRows, isRightDirty]
   );
+  copyLeftToRightRef.current = handleCopyLeftToRight;
 
   // Copy right → left (stage new values into the left workbook)
   const handleCopyRightToLeft = useCallback(
@@ -562,6 +639,7 @@ export default function DiffView() {
       if (!oldSheetData) return;
 
       // Build modified old rows
+      const originalOldRows = oldSheetData.rows.map((r) => r.map((c) => ({ ...c })));
       const modifiedOldRows = oldSheetData.rows.map((r) => r.map((c) => ({ ...c })));
       let copiedRows = 0;
 
@@ -605,13 +683,47 @@ export default function DiffView() {
         if (s.name === currentSheet) return { ...s, rows: modifiedOldRows };
         return s;
       });
+      pushEdit({
+        type: "batch-copy",
+        undoPayload: [{ rowKey: "__left_rows__", columnIndex: LEFT_ROWS_SNAPSHOT, value: JSON.stringify(originalOldRows) }],
+        redoPayload: [{ rowKey: "__left_rows__", columnIndex: LEFT_ROWS_SNAPSHOT, value: JSON.stringify(modifiedOldRows) }],
+        description: `右→左 ${copiedRows}行`,
+      });
       setOldWorkbook({ ...oldWorkbook, sheets });
       setLeftSelected([]);
       setRightSelected([]);
       setLeftDirty(true);
     },
-    [diffResult, effectiveNewRows, oldWorkbook, currentSheet, setOldWorkbook]
+    [diffResult, effectiveNewRows, oldWorkbook, currentSheet, pushEdit, setOldWorkbook]
   );
+  copyRightToLeftRef.current = handleCopyRightToLeft;
+
+  const handleRowContextMenu = useCallback((side: "old" | "new", rowRef: string, x: number, y: number) => {
+    const menuWidth = 150;
+    const menuHeight = 42;
+    setRowContextMenu({
+      side,
+      rowRef,
+      x: Math.min(x, window.innerWidth - menuWidth - 8),
+      y: Math.min(y, window.innerHeight - menuHeight - 8),
+    });
+  }, []);
+
+  const handleCopyContextRow = useCallback(() => {
+    if (!rowContextMenu) return;
+
+    const sideSelection = rowContextMenu.side === "old" ? leftSelected : rightSelected;
+    const rowRefs = sideSelection.includes(rowContextMenu.rowRef) && sideSelection.length > 0
+      ? sideSelection
+      : [rowContextMenu.rowRef];
+
+    if (rowContextMenu.side === "old") {
+      handleCopyLeftToRight(rowRefs);
+    } else {
+      handleCopyRightToLeft(rowRefs);
+    }
+    setRowContextMenu(null);
+  }, [handleCopyLeftToRight, handleCopyRightToLeft, leftSelected, rightSelected, rowContextMenu]);
 
   // Cell edit
   const handleLeftCellEdit = useCallback(
@@ -665,12 +777,119 @@ export default function DiffView() {
     [diffResult, effectiveNewRows, findNewRowIndex, pushEdit, setEffectiveNewRows]
   );
 
+  const startDetailEdit = useCallback((side: "old" | "new", rowRef: string, columnIndex: number, cell: CellData | undefined) => {
+    skipDetailCommitRef.current = false;
+    setDetailEdit({
+      side,
+      rowRef,
+      columnIndex,
+      value: cellValueToEditText(cell),
+    });
+  }, []);
+
+  const cancelDetailEdit = useCallback(() => {
+    skipDetailCommitRef.current = true;
+    setDetailEdit(null);
+  }, []);
+
+  const commitDetailEdit = useCallback(() => {
+    if (skipDetailCommitRef.current) {
+      skipDetailCommitRef.current = false;
+      return;
+    }
+    if (!detailEdit) return;
+    const row = findDiffRowByRef(diffResult, detailEdit.rowRef);
+    if (!row) {
+      setDetailEdit(null);
+      return;
+    }
+
+    const sourceRow = detailEdit.side === "old" ? row.oldRow : row.newRow;
+    const oldCell = sourceRow?.[detailEdit.columnIndex];
+    const parsed = parseEditedCellValue(detailEdit.value);
+    if ((oldCell?.value ?? null) === parsed.value && oldCell?.formula === parsed.formula) {
+      skipDetailCommitRef.current = true;
+      setDetailEdit(null);
+      return;
+    }
+
+    if (detailEdit.side === "old") {
+      if (!oldWorkbook || !row.oldRowNumber) {
+        skipDetailCommitRef.current = true;
+        setDetailEdit(null);
+        return;
+      }
+      const oldSheetData = oldWorkbook.sheets.find((s) => s.name === currentSheet);
+      if (!oldSheetData) {
+        skipDetailCommitRef.current = true;
+        setDetailEdit(null);
+        return;
+      }
+      const originalRows = oldSheetData.rows.map((r) => r.map((c) => ({ ...c })));
+      const nextRows = oldSheetData.rows.map((r) => r.map((c) => ({ ...c })));
+      const rowIndex = row.oldRowNumber - 1;
+      while (nextRows[rowIndex].length <= detailEdit.columnIndex) nextRows[rowIndex].push({ value: null });
+      nextRows[rowIndex][detailEdit.columnIndex] = { value: parsed.value, formula: parsed.formula };
+      pushEdit({
+        type: "cell-edit",
+        undoPayload: [{ rowKey: "__left_rows__", columnIndex: LEFT_ROWS_SNAPSHOT, value: JSON.stringify(originalRows) }],
+        redoPayload: [{ rowKey: "__left_rows__", columnIndex: LEFT_ROWS_SNAPSHOT, value: JSON.stringify(nextRows) }],
+        description: "编辑左侧详情",
+      });
+      const sheets = oldWorkbook.sheets.map((s) => s.name === currentSheet ? { ...s, rows: nextRows } : s);
+      setOldWorkbook({ ...oldWorkbook, sheets });
+      setLeftDirty(true);
+    } else {
+      if (!effectiveNewRows || !row.newRowNumber) {
+        skipDetailCommitRef.current = true;
+        setDetailEdit(null);
+        return;
+      }
+      const originalRows = effectiveNewRows.map((r) => r.map((c) => ({ ...c })));
+      const nextRows = effectiveNewRows.map((r) => r.map((c) => ({ ...c })));
+      const rowIndex = row.newRowNumber - 1;
+      while (nextRows[rowIndex].length <= detailEdit.columnIndex) nextRows[rowIndex].push({ value: null });
+      nextRows[rowIndex][detailEdit.columnIndex] = { value: parsed.value, formula: parsed.formula };
+      pushEdit({
+        type: "cell-edit",
+        undoPayload: [{ rowKey: "__right_rows__", columnIndex: RIGHT_ROWS_SNAPSHOT, value: JSON.stringify(originalRows) }],
+        redoPayload: [{ rowKey: "__right_rows__", columnIndex: RIGHT_ROWS_SNAPSHOT, value: JSON.stringify(nextRows) }],
+        description: "编辑右侧详情",
+      });
+      setEffectiveNewRows(nextRows);
+      setRightDirty(isRightDirty(nextRows));
+    }
+    skipDetailCommitRef.current = true;
+    setDetailEdit(null);
+  }, [currentSheet, detailEdit, diffResult, effectiveNewRows, isRightDirty, oldWorkbook, pushEdit, setEffectiveNewRows, setOldWorkbook]);
+
   // Undo
   const handleUndo = useCallback(() => {
     const op = undo(); if (!op || !effectiveNewRows) return;
+    const rightSnapshot = op.undoPayload.find((c) => c.columnIndex === RIGHT_ROWS_SNAPSHOT);
+    if (rightSnapshot) {
+      const restoredRows = (JSON.parse(rightSnapshot.value as string) as Row[]).map((r) => r.map((c) => ({ ...c })));
+      setEffectiveNewRows(restoredRows);
+      setRightDirty(isRightDirty(restoredRows));
+      return;
+    }
+
+    const leftSnapshot = op.undoPayload.find((c) => c.columnIndex === LEFT_ROWS_SNAPSHOT);
+    if (leftSnapshot && oldWorkbook) {
+      const restoredRows = (JSON.parse(leftSnapshot.value as string) as Row[]).map((r) => r.map((c) => ({ ...c })));
+      const sheets = oldWorkbook.sheets.map((s) => s.name === currentSheet ? { ...s, rows: restoredRows } : s);
+      setOldWorkbook({ ...oldWorkbook, sheets });
+      setLeftDirty(true);
+      return;
+    }
+
     const localRows = effectiveNewRows.map((r) => r.map((c) => ({ ...c })));
     for (const c of op.undoPayload) {
-      if (c.columnIndex === -1) { localRows.pop(); }
+      if (c.columnIndex === -1) {
+        const idx = Number(c.formula ?? localRows.length - 1);
+        if (idx >= 0 && idx < localRows.length) localRows.splice(idx, 1);
+        else localRows.pop();
+      }
       else if (c.columnIndex === -3) {
         const rowData = JSON.parse(c.value as string);
         const idx = Math.max(0, Math.min(localRows.length, Number(c.formula ?? localRows.length)));
@@ -690,16 +909,35 @@ export default function DiffView() {
     }
     setEffectiveNewRows(localRows);
     setRightDirty(isRightDirty(localRows));
-  }, [undo, effectiveNewRows, diffResult, setEffectiveNewRows, isRightDirty]);
+  }, [undo, effectiveNewRows, diffResult, oldWorkbook, currentSheet, setEffectiveNewRows, setOldWorkbook, isRightDirty]);
+  undoRef.current = handleUndo;
 
   // Redo
   const handleRedo = useCallback(() => {
     const op = redo(); if (!op || !effectiveNewRows) return;
+    const rightSnapshot = op.redoPayload.find((c) => c.columnIndex === RIGHT_ROWS_SNAPSHOT);
+    if (rightSnapshot) {
+      const restoredRows = (JSON.parse(rightSnapshot.value as string) as Row[]).map((r) => r.map((c) => ({ ...c })));
+      setEffectiveNewRows(restoredRows);
+      setRightDirty(isRightDirty(restoredRows));
+      return;
+    }
+
+    const leftSnapshot = op.redoPayload.find((c) => c.columnIndex === LEFT_ROWS_SNAPSHOT);
+    if (leftSnapshot && oldWorkbook) {
+      const restoredRows = (JSON.parse(leftSnapshot.value as string) as Row[]).map((r) => r.map((c) => ({ ...c })));
+      const sheets = oldWorkbook.sheets.map((s) => s.name === currentSheet ? { ...s, rows: restoredRows } : s);
+      setOldWorkbook({ ...oldWorkbook, sheets });
+      setLeftDirty(true);
+      return;
+    }
+
     const localRows = effectiveNewRows.map((r) => r.map((c) => ({ ...c })));
     for (const c of op.redoPayload) {
       if (c.columnIndex === -2) {
         const rowData = JSON.parse(c.value as string);
-        localRows.push(rowData.map((cell: CellData) => ({ ...cell })));
+        const idx = Math.max(0, Math.min(localRows.length, Number(c.formula ?? localRows.length)));
+        localRows.splice(idx, 0, rowData.map((cell: CellData) => ({ ...cell })));
       }
       else if (c.columnIndex === -4) {
         const idx = Number(c.formula ?? -1);
@@ -719,7 +957,8 @@ export default function DiffView() {
     }
     setEffectiveNewRows(localRows);
     setRightDirty(isRightDirty(localRows));
-  }, [redo, effectiveNewRows, diffResult, setEffectiveNewRows, isRightDirty]);
+  }, [redo, effectiveNewRows, diffResult, oldWorkbook, currentSheet, setEffectiveNewRows, setOldWorkbook, isRightDirty]);
+  redoRef.current = handleRedo;
 
   // Save
   // Save right side — incremental (only changed cells)
@@ -796,6 +1035,7 @@ export default function DiffView() {
       alert("右侧保存成功！");
     } catch (e: any) { setError({ title: "保存失败", message: e?.message || String(e) }); }
   }, [newWorkbook, effectiveNewRows, selectedFilePair, currentSheet, setEffectiveNewRows, markCurrentFileStatus, diffResult, oldSheet, newSheet, keyColumnIndices]);
+  saveRightRef.current = handleSaveRight;
 
   // Save left side (old data)
   const handleSaveLeft = useCallback(async () => {
@@ -914,6 +1154,27 @@ export default function DiffView() {
   const overviewViewportTop = `${Math.max(0, Math.min(1 - viewportRatio, viewportTopRatio * (1 - viewportRatio))) * 100}%`;
   const overviewViewportHeight = `${Math.max(viewportRatio * 100, 5)}%`;
   const selectedRowRefs = uniqueRowRefs(leftSelected, rightSelected);
+  const selectedDetailRef = selectedRowRefs[0] ?? activeDiffRowRef ?? null;
+  const selectedDetailRow = selectedDetailRef ? findDiffRowByRef(diffResult, selectedDetailRef) : undefined;
+  const selectedDetailFields: DetailField[] = selectedDetailRow ? (() => {
+    const maxCols = Math.max(
+      oldSheet?.columns.length ?? 0,
+      newSheet?.columns.length ?? 0,
+      selectedDetailRow.oldRow?.length ?? 0,
+      selectedDetailRow.newRow?.length ?? 0
+    );
+    const diffSet = new Set(selectedDetailRow.cellDiffs.map((d) => d.columnIndex));
+    return Array.from({ length: maxCols }, (_, index) => {
+      const name = oldSheet?.columns[index]?.name ?? newSheet?.columns[index]?.name ?? `Column ${index + 1}`;
+      return {
+        index,
+        name,
+        oldText: formatDetailCell(selectedDetailRow.oldRow?.[index]),
+        newText: formatDetailCell(selectedDetailRow.newRow?.[index]),
+        isDifferent: diffSet.has(index),
+      };
+    });
+  })() : [];
   const leftToRightRefs = selectedRowRefs.filter((rowRef) => {
     const row = findDiffRowByRef(diffResult, rowRef);
     return !!row && row.status !== "unchanged";
@@ -1101,7 +1362,8 @@ export default function DiffView() {
             onScroll={handleGridScroll}
             columnWidths={columnWidths} onColumnWidthsChange={setColumnWidths}
             searchText={searchText} searchMatches={searchMatches} currentMatchIndex={currentMatchIndex}
-            scrollToRowRef={activeDiffRowRef} scrollToSignal={diffJumpSignal} />
+            scrollToRowRef={activeDiffRowRef} scrollToSignal={diffJumpSignal}
+            onRowContextMenu={handleRowContextMenu} />
         </div>
 
         {/* Center action bar — BC style */}
@@ -1127,8 +1389,26 @@ export default function DiffView() {
             onScroll={handleGridScroll} onScrollMetrics={handleScrollMetrics}
             columnWidths={columnWidths} onColumnWidthsChange={setColumnWidths}
             searchText={searchText} searchMatches={searchMatches} currentMatchIndex={currentMatchIndex}
-            scrollToRowRef={activeDiffRowRef} scrollToSignal={diffJumpSignal} />
+            scrollToRowRef={activeDiffRowRef} scrollToSignal={diffJumpSignal}
+            onRowContextMenu={handleRowContextMenu} />
         </div>
+
+        {rowContextMenu && (
+          <div
+            className="fixed z-50 min-w-[150px] rounded border border-gray-200 bg-white py-1 shadow-lg"
+            style={{ left: rowContextMenu.x, top: rowContextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button
+              type="button"
+              onClick={handleCopyContextRow}
+              className="w-full px-3 py-1.5 text-left text-sm text-gray-800 hover:bg-blue-50 hover:text-blue-700"
+            >
+              复制到对侧
+            </button>
+          </div>
+        )}
 
 
         {diffBlockCount > 0 && (
@@ -1162,6 +1442,105 @@ export default function DiffView() {
       </div>
 
       {/* Bottom status bar — BC style */}
+      <div className="h-44 shrink-0 border-t bg-white text-xs">
+        <div className="flex items-center gap-3 border-b bg-gray-50 px-3 py-1 text-gray-600">
+          <span className="font-semibold text-gray-700">选中数据详情</span>
+          {selectedDetailRow ? (
+            <>
+              <span>左侧行 {selectedDetailRow.oldRowNumber ?? "-"}</span>
+              <span>右侧行 {selectedDetailRow.newRowNumber ?? "-"}</span>
+              <span className="text-red-600">{selectedDetailRow.cellDiffs.length} 个差异单元格</span>
+              {selectedRowRefs.length > 1 && <span className="text-gray-400">已选 {selectedRowRefs.length} 行，显示第 1 行</span>}
+            </>
+          ) : (
+            <span className="text-gray-400">选择一行后在这里查看完整内容</span>
+          )}
+        </div>
+        <div className="h-[calc(100%-29px)] overflow-auto">
+          {selectedDetailRow ? (
+            <table className="w-full table-fixed border-collapse">
+              <colgroup>
+                <col className="w-[18%]" />
+                <col className="w-[41%]" />
+                <col className="w-[41%]" />
+              </colgroup>
+              <thead className="sticky top-0 z-10 bg-white">
+                <tr className="border-b text-left text-gray-500">
+                  <th className="px-3 py-1 font-semibold">字段</th>
+                  <th className="px-3 py-1 font-semibold">左侧完整内容</th>
+                  <th className="px-3 py-1 font-semibold">右侧完整内容</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedDetailFields.map((field) => (
+                  <tr key={field.index} className={`border-b align-top ${field.isDifferent ? "bg-red-50" : ""}`}>
+                    <td className="px-3 py-1.5 font-medium text-gray-700">
+                      <div className="truncate" title={field.name}>{field.name}</div>
+                    </td>
+                    <td
+                      className={`px-3 py-1.5 whitespace-pre-wrap break-words font-mono ${field.isDifferent ? "bg-red-100/70" : ""}`}
+                      onDoubleClick={() => selectedDetailRef && startDetailEdit("old", selectedDetailRef, field.index, selectedDetailRow.oldRow?.[field.index])}
+                      title="双击编辑左侧内容"
+                    >
+                      {detailEdit?.side === "old" && detailEdit.rowRef === selectedDetailRef && detailEdit.columnIndex === field.index ? (
+                        <textarea
+                          autoFocus
+                          value={detailEdit.value}
+                          onChange={(event) => setDetailEdit({ ...detailEdit, value: event.target.value })}
+                          onBlur={commitDetailEdit}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              cancelDetailEdit();
+                            }
+                            if (event.key === "Enter" && (event.ctrlKey || !event.shiftKey)) {
+                              event.preventDefault();
+                              commitDetailEdit();
+                            }
+                          }}
+                          className="min-h-[72px] w-full resize-y rounded border border-blue-400 bg-white p-1 font-mono text-xs outline-none"
+                        />
+                      ) : (
+                        field.oldText
+                      )}
+                    </td>
+                    <td
+                      className={`px-3 py-1.5 whitespace-pre-wrap break-words font-mono ${field.isDifferent ? "bg-red-100/70" : ""}`}
+                      onDoubleClick={() => selectedDetailRef && startDetailEdit("new", selectedDetailRef, field.index, selectedDetailRow.newRow?.[field.index])}
+                      title="双击编辑右侧内容"
+                    >
+                      {detailEdit?.side === "new" && detailEdit.rowRef === selectedDetailRef && detailEdit.columnIndex === field.index ? (
+                        <textarea
+                          autoFocus
+                          value={detailEdit.value}
+                          onChange={(event) => setDetailEdit({ ...detailEdit, value: event.target.value })}
+                          onBlur={commitDetailEdit}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              cancelDetailEdit();
+                            }
+                            if (event.key === "Enter" && (event.ctrlKey || !event.shiftKey)) {
+                              event.preventDefault();
+                              commitDetailEdit();
+                            }
+                          }}
+                          className="min-h-[72px] w-full resize-y rounded border border-blue-400 bg-white p-1 font-mono text-xs outline-none"
+                        />
+                      ) : (
+                        field.newText
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="flex h-full items-center justify-center text-gray-400">暂无选中数据</div>
+          )}
+        </div>
+      </div>
+
       <div className="flex items-center px-4 py-1 bg-gray-100 border-t text-xs text-gray-600">
         <span>差异 <b className="text-red-600">{diffCount}</b></span>
         <span className="mx-2">|</span>

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Excel writer using openpyxl — supports BOTH modes:
   1. Full sheet write (legacy): {"sheets": [{"name": "...", "rows": [...]}]}

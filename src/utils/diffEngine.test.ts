@@ -105,6 +105,92 @@ describe('computeDiff', () => {
     expect(result.diffRows[1].status).toBe('added');
   });
 
+  it('keeps inserted new rows near their spreadsheet position', () => {
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      ['2', 'Bob'],
+      [null, null],
+      ['10', 'Later'],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      ['2', 'Bob'],
+      ['5', 'Inserted'],
+      [null, null],
+      ['10', 'Later'],
+    ]);
+
+    const result = computeDiff(oldSheet, newSheet, [0]);
+
+    expect(result.stats.added).toBe(1);
+    expect(result.diffRows.map((row) => ({
+      status: row.status,
+      oldRowNumber: row.oldRowNumber,
+      newRowNumber: row.newRowNumber,
+      newId: row.newRow?.[0]?.value ?? null,
+    }))).toEqual([
+      { status: 'unchanged', oldRowNumber: 2, newRowNumber: 2, newId: '1' },
+      { status: 'unchanged', oldRowNumber: 3, newRowNumber: 3, newId: '2' },
+      { status: 'added', oldRowNumber: null, newRowNumber: 4, newId: '5' },
+      { status: 'unchanged', oldRowNumber: 4, newRowNumber: 5, newId: null },
+      { status: 'unchanged', oldRowNumber: 5, newRowNumber: 6, newId: '10' },
+    ]);
+  });
+
+  it('does not render empty placeholders as extra added rows after a deletion', () => {
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      ['2', 'Bob'],
+      ['5', 'Deleted'],
+      [null, null],
+      ['10', 'Later'],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      ['2', 'Bob'],
+      [null, null],
+      [null, null],
+      ['10', 'Later'],
+    ]);
+
+    const result = computeDiff(oldSheet, newSheet, [0]);
+
+    expect(result.stats.deleted).toBe(1);
+    expect(result.stats.added).toBe(0);
+    expect(result.diffRows.map((row) => ({
+      status: row.status,
+      oldRowNumber: row.oldRowNumber,
+      newRowNumber: row.newRowNumber,
+      oldId: row.oldRow?.[0]?.value ?? null,
+      newId: row.newRow?.[0]?.value ?? null,
+    }))).toEqual([
+      { status: 'unchanged', oldRowNumber: 2, newRowNumber: 2, oldId: '1', newId: '1' },
+      { status: 'unchanged', oldRowNumber: 3, newRowNumber: 3, oldId: '2', newId: '2' },
+      { status: 'deleted', oldRowNumber: 4, newRowNumber: null, oldId: '5', newId: null },
+      { status: 'unchanged', oldRowNumber: 5, newRowNumber: 5, oldId: null, newId: null },
+      { status: 'unchanged', oldRowNumber: 6, newRowNumber: 6, oldId: '10', newId: '10' },
+    ]);
+  });
+
+  it('does not treat moved rows as inserted while interleaving additions', () => {
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      ['2', 'Bob'],
+      ['3', 'Cara'],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['2', 'Bob'],
+      ['1', 'Alice'],
+      ['3', 'Cara'],
+    ]);
+
+    const result = computeDiff(oldSheet, newSheet, [0]);
+
+    expect(result.stats.added).toBe(0);
+    expect(result.stats.deleted).toBe(0);
+    expect(result.diffRows.map((row) => row.status)).toEqual(['unchanged', 'unchanged', 'unchanged']);
+  });
+
   it('detects deleted rows', () => {
     const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
       ['1', 'Alice'],
@@ -199,6 +285,18 @@ describe('computeDiff', () => {
     ]);
     const result = computeDiff(oldSheet, newSheet, [0]);
     expect(result.stats.unchanged).toBe(1);
+  });
+
+  it('treats numbers and matching numeric text as equal', () => {
+    const oldSheet = makeSheet('Sheet1', ['Role ID', 'Skill Type'], [
+      [1000, 5],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['Role ID', 'Skill Type'], [
+      ['1000', '5'],
+    ]);
+    const result = computeDiff(oldSheet, newSheet, [0, 1]);
+    expect(result.stats.unchanged).toBe(1);
+    expect(result.stats.modified).toBe(0);
   });
 
   it('detects different floats', () => {
@@ -369,7 +467,39 @@ describe('computeDiff', () => {
     expect(result.stats.modified).toBe(1);
   });
 
-  it('detects formula vs non-formula as modified', () => {
+  it('treats shifted relative row references as the same formula', () => {
+    const oldSheet: SheetData = {
+      name: 'Sheet1',
+      columns: [
+        { index: 0, name: 'TAG', dataType: 'mixed' },
+        { index: 1, name: 'Value', dataType: 'mixed' },
+        { index: 2, name: 'State', dataType: 'mixed' },
+        { index: 3, name: 'Invert', dataType: 'mixed' },
+        { index: 4, name: 'Quest', dataType: 'mixed' },
+      ],
+      rows: [
+        [{ value: 'TAG' }, { value: 'Value' }, { value: 'State' }, { value: 'Invert' }, { value: 'Quest' }],
+        [{ value: 'QUEST_91100_FINISH', formula: '"QUEST_"&E2&"_FINISH"' }, { value: null }, { value: 'QuestState' }, { value: null }, { value: 91100 }],
+      ],
+    };
+    const newSheet: SheetData = {
+      ...oldSheet,
+      rows: [
+        oldSheet.rows[0],
+        [{ value: 'INSERTED_1' }, { value: null }, { value: null }, { value: null }, { value: null }],
+        [{ value: 'INSERTED_2' }, { value: null }, { value: null }, { value: null }, { value: null }],
+        [{ value: 'INSERTED_3' }, { value: null }, { value: null }, { value: null }, { value: null }],
+        [{ value: 'INSERTED_4' }, { value: null }, { value: null }, { value: null }, { value: null }],
+        [{ value: 'QUEST_91100_FINISH', formula: '"QUEST_"&E6&"_FINISH"' }, { value: null }, { value: 'QuestState' }, { value: null }, { value: 91100 }],
+      ],
+    };
+    const result = computeDiff(oldSheet, newSheet, [0]);
+    const matched = result.diffRows.find((row) => row.key === '[[0,"QUEST_91100_FINISH"]]');
+    expect(matched?.status).toBe('unchanged');
+    expect(matched?.cellDiffs).toEqual([]);
+  });
+
+  it('treats formula and matching computed value as equal', () => {
     const oldSheet: SheetData = {
       name: 'Sheet1',
       columns: [{ index: 0, name: 'ID', dataType: 'mixed' }, { index: 1, name: 'Calc', dataType: 'mixed' }],
@@ -387,6 +517,7 @@ describe('computeDiff', () => {
       ],
     };
     const result = computeDiff(oldSheet, newSheet, [0]);
-    expect(result.stats.modified).toBe(1);
+    expect(result.stats.unchanged).toBe(1);
+    expect(result.stats.modified).toBe(0);
   });
 });

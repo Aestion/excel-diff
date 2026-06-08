@@ -1,6 +1,6 @@
 import { forwardRef, useMemo, useCallback, useRef, useEffect, useImperativeHandle } from "react";
 import { AgGridReact } from "ag-grid-react";
-import type { ColDef, RowClassParams, CellValueChangedEvent } from "ag-grid-community";
+import type { ColDef, RowClassParams, CellValueChangedEvent, CellContextMenuEvent } from "ag-grid-community";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-alpine.css";
 import type { CellValue, ColumnInfo } from "../types/excel";
@@ -33,6 +33,7 @@ interface DiffGridProps {
   currentMatchIndex?: number;
   scrollToRowRef?: string | null;
   scrollToSignal?: number;
+  onRowContextMenu?: (side: "old" | "new", rowRef: string, x: number, y: number) => void;
 }
 
 export type DiffGridHandle = {
@@ -40,7 +41,7 @@ export type DiffGridHandle = {
   scrollBy: (deltaY: number, deltaX: number) => void;
 };
 
-const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ side, diffResult, columns, onCellEdit, onSelectionChanged, filter = "all", onScroll, onScrollMetrics, isScrollFollower = false, onFollowerWheel, columnWidths, onColumnWidthsChange, searchText, searchMatches, currentMatchIndex, scrollToRowRef, scrollToSignal }, ref) {
+const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ side, diffResult, columns, onCellEdit, onSelectionChanged, filter = "all", onScroll, onScrollMetrics, isScrollFollower = false, onFollowerWheel, columnWidths, onColumnWidthsChange, searchText, searchMatches, currentMatchIndex, scrollToRowRef, scrollToSignal, onRowContextMenu }, ref) {
   const gridRef = useRef<AgGridReact>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const syncingRef = useRef(false);
@@ -260,6 +261,15 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
     onColumnWidthsChange(next);
   }, [onColumnWidthsChange]);
 
+  const handleCellContextMenu = useCallback((event: CellContextMenuEvent) => {
+    const nativeEvent = event.event as MouseEvent | undefined;
+    nativeEvent?.preventDefault();
+    nativeEvent?.stopPropagation();
+    const rowRef = event.data?._rowRef;
+    if (!rowRef || !nativeEvent) return;
+    onRowContextMenu?.(side, rowRef, nativeEvent.clientX, nativeEvent.clientY);
+  }, [onRowContextMenu, side]);
+
   useEffect(() => {
     if (!scrollToRowRef || !gridRef.current?.api) return;
     const rowIndex = rowData.findIndex((row) => row._rowRef === scrollToRowRef);
@@ -298,12 +308,14 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
     <div
       ref={containerRef}
       className={`ag-theme-alpine h-full w-full ${isScrollFollower ? "diff-grid-follower" : ""}`}
+      onContextMenu={(event) => event.preventDefault()}
     >
       <AgGridReact
         ref={gridRef}
         columnDefs={columnDefs} rowData={rowData}
         getRowClass={getRowClass}
         onCellValueChanged={handleCellValueChanged}
+        onCellContextMenu={handleCellContextMenu}
         onColumnResized={handleColumnResized}
         onSelectionChanged={handleSelectionChanged}
         rowSelection={{
@@ -318,6 +330,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
         suppressRowHoverHighlight={true}
         suppressCellFocus={!onCellEdit}
         stopEditingWhenCellsLoseFocus={true}
+        suppressContextMenu={true}
         defaultColDef={{ sortable: false, resizable: true }}
       />
     </div>

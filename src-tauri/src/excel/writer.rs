@@ -1,13 +1,15 @@
+use crate::excel::engine::{current_engine, ExcelEngine};
 use crate::models::SheetData;
 use std::io::Write;
 use std::process::Command;
-use crate::excel::engine::{current_engine, ExcelEngine};
 
 fn find_write_script() -> Result<String, String> {
     if let Ok(exe_dir) = std::env::current_exe() {
         if let Some(dir) = exe_dir.parent() {
             let p = dir.join("write_excel.py");
-            if p.exists() { return Ok(p.to_string_lossy().to_string()); }
+            if p.exists() {
+                return Ok(p.to_string_lossy().to_string());
+            }
         }
     }
 
@@ -35,7 +37,9 @@ fn find_write_script_xlwings() -> Result<String, String> {
     if let Ok(exe_dir) = std::env::current_exe() {
         if let Some(dir) = exe_dir.parent() {
             let p = dir.join("write_excel_xlwings.py");
-            if p.exists() { return Ok(p.to_string_lossy().to_string()); }
+            if p.exists() {
+                return Ok(p.to_string_lossy().to_string());
+            }
         }
     }
 
@@ -59,8 +63,55 @@ fn find_write_script_xlwings() -> Result<String, String> {
     Err("找不到 write_excel_xlwings.py 脚本".to_string())
 }
 
+fn python3_candidates() -> Vec<(&'static str, Vec<&'static str>)> {
+    if cfg!(windows) {
+        vec![
+            ("py", vec!["-3"]),
+            ("python3", vec![]),
+            ("python", vec![]),
+        ]
+    } else {
+        vec![("python3", vec![]), ("python", vec![])]
+    }
+}
+
+fn command_version(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program)
+        .args(args)
+        .arg("--version")
+        .output()
+        .ok()?;
+
+    let text = if output.stdout.is_empty() {
+        String::from_utf8_lossy(&output.stderr).to_string()
+    } else {
+        String::from_utf8_lossy(&output.stdout).to_string()
+    };
+    Some(text.trim().to_string())
+}
+
+fn find_python3() -> Result<(String, Vec<String>), String> {
+    let mut tried = Vec::new();
+    for (program, args) in python3_candidates() {
+        match command_version(program, &args) {
+            Some(version) if version.starts_with("Python 3.") => {
+                return Ok((
+                    program.to_string(),
+                    args.into_iter().map(String::from).collect(),
+                ));
+            }
+            Some(version) => tried.push(format!("{} {} => {}", program, args.join(" "), version)),
+            None => tried.push(format!("{} {} => not found", program, args.join(" "))),
+        }
+    }
+
+    Err(format!("找不到可用的 Python 3。已尝试: {}", tried.join("; ")))
+}
+
 fn try_write(script_path: &str, file_path: &str, json_path: &str) -> Result<(), String> {
-    let output = Command::new("python")
+    let (python, python_args) = find_python3()?;
+    let output = Command::new(&python)
+        .args(&python_args)
         .arg(script_path)
         .arg(file_path)
         .arg(json_path)
@@ -85,10 +136,7 @@ pub fn write_changes(file_path: &str, changes_json: &str) -> Result<(), String> 
     result
 }
 
-pub fn write_workbook(
-    file_path: &str,
-    sheets: &[SheetData],
-) -> Result<(), String> {
+pub fn write_workbook(file_path: &str, sheets: &[SheetData]) -> Result<(), String> {
     let data = serde_json::json!({
         "sheets": sheets.iter().map(|s| serde_json::json!({
             "name": s.name,

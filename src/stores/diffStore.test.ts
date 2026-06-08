@@ -313,7 +313,7 @@ describe('diffStore', () => {
     expect(useDiffStore.getState().filePairs.map((p) => p.diffStatus)).toEqual(['identical', 'unknown']);
   });
 
-  it('marks matched files as different when formulas differ but values match', async () => {
+  it('marks matched files as identical when formulas differ but values match', async () => {
     const store = useDiffStore.getState();
     store.setFilePairs([
       {
@@ -362,6 +362,6 @@ describe('diffStore', () => {
 
     await store.verifyAllFiles();
 
-    expect(useDiffStore.getState().filePairs[0].diffStatus).toBe('different');
+    expect(useDiffStore.getState().filePairs[0].diffStatus).toBe('identical');
   });
 });

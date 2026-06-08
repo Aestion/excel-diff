@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Excel writer using xlwings (Excel COM)
 Supports the same JSON input format as write_excel.py

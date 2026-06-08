@@ -35,8 +35,7 @@ export function buildKey(row: Row, keyColumns: number[]): RowKey {
 function cellSignature(cell: CellData | undefined): string {
   const rawValue = cell?.value ?? null;
   const value = typeof rawValue === "string" ? normalizeTextValue(rawValue) : rawValue;
-  const formula = cell?.formula ?? null;
-  return JSON.stringify([value, formula]);
+  return JSON.stringify(value);
 }
 
 function rowSignature(row: Row): string {
@@ -47,19 +46,47 @@ function rowSignature(row: Row): string {
   return JSON.stringify(row.slice(0, lastNonEmpty + 1).map(cellSignature));
 }
 
+function rowIsEmpty(row: Row | undefined): boolean {
+  return !row || row.every((cell) => cellDataEqual(cell, undefined));
+}
+
 function cellValuesEqual(a: CellValue, b: CellValue): boolean {
   if (a === b) return true;
   if (a === null && b === "") return true;
   if (a === "" && b === null) return true;
   if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) < 1e-10;
+  if (typeof a === "number" && typeof b === "string") {
+    return String(a) === b.trim();
+  }
+  if (typeof a === "string" && typeof b === "number") {
+    return a.trim() === String(b);
+  }
   if (typeof a === "string" && typeof b === "string") {
     return normalizeTextValue(a) === normalizeTextValue(b);
   }
   return false;
 }
 
-function cellFormulasEqual(a: string | undefined, b: string | undefined): boolean {
-  return a === b;
+function normalizeFormulaForRow(formula: string, excelRowNumber: number | null): string {
+  if (excelRowNumber == null) return formula;
+
+  return formula.replace(/(\$?[A-Za-z]{1,3})(\$?)(\d+)/g, (_match, column: string, rowAnchor: string, rowText: string) => {
+    if (rowAnchor === "$") return `${column}${rowAnchor}${rowText}`;
+    const rowNumber = Number(rowText);
+    if (!Number.isFinite(rowNumber)) return `${column}${rowText}`;
+    return `${column}[r${rowNumber - excelRowNumber}]`;
+  });
+}
+
+function cellFormulasEqual(
+  a: string | undefined,
+  b: string | undefined,
+  oldExcelRowNumber: number | null = null,
+  newExcelRowNumber: number | null = null
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return normalizeFormulaForRow(a, oldExcelRowNumber) === normalizeFormulaForRow(b, newExcelRowNumber);
 }
 
 function isEmptyValue(v: CellValue): boolean {
@@ -67,28 +94,43 @@ function isEmptyValue(v: CellValue): boolean {
 }
 
 export function cellDataEqual(oldCell: CellData | undefined, newCell: CellData | undefined): boolean {
+  return cellDataEqualAt(oldCell, newCell);
+}
+
+function cellDataEqualAt(
+  oldCell: CellData | undefined,
+  newCell: CellData | undefined,
+  oldExcelRowNumber: number | null = null,
+  newExcelRowNumber: number | null = null
+): boolean {
   const oldVal = oldCell?.value ?? null;
   const newVal = newCell?.value ?? null;
   const oldFormula = oldCell?.formula;
   const newFormula = newCell?.formula;
 
-  // If both sides have the same formula, consider them equal
-  // regardless of cached computed value availability
-  if (oldFormula && newFormula && oldFormula === newFormula) return true;
+  // If both sides have the same formula, consider them equal regardless of
+  // cached computed value availability. Relative row references may shift
+  // when rows are inserted above, so compare formulas in row context.
+  if (oldFormula && newFormula && cellFormulasEqual(oldFormula, newFormula, oldExcelRowNumber, newExcelRowNumber)) return true;
 
   if (isEmptyValue(oldVal) && isEmptyValue(newVal) && !oldFormula && !newFormula) return true;
 
-  return cellValuesEqual(oldVal, newVal) && cellFormulasEqual(oldFormula, newFormula);
+  // This tool compares the effective table data. If the displayed/computed
+  // values are equal, do not mark a difference just because one side stores a
+  // formula and the other side stores the computed value.
+  if (cellValuesEqual(oldVal, newVal)) return true;
+
+  return !!oldFormula && !!newFormula && cellFormulasEqual(oldFormula, newFormula, oldExcelRowNumber, newExcelRowNumber);
 }
 
-function compareRows(oldRow: Row, newRow: Row): CellDiff[] {
+function compareRows(oldRow: Row, newRow: Row, oldExcelRowNumber: number | null = null, newExcelRowNumber: number | null = null): CellDiff[] {
   const diffs: CellDiff[] = [];
   const maxCols = Math.max(oldRow.length, newRow.length);
   for (let col = 0; col < maxCols; col++) {
     const oldCell = col < oldRow.length ? oldRow[col] : { value: null };
     const newCell = col < newRow.length ? newRow[col] : { value: null };
 
-    if (!cellDataEqual(oldCell, newCell)) {
+    if (!cellDataEqualAt(oldCell, newCell, oldExcelRowNumber, newExcelRowNumber)) {
       diffs.push({
         columnIndex: col,
         oldValue: oldCell.value,
@@ -137,6 +179,37 @@ export function computeDiff(
   const diffRows: DiffRow[] = [];
   let viewIndex = 0;
 
+  const keyHasUnconsumedOldRow = (key: RowKey): boolean => {
+    return oldByKey.get(key)?.some((idx) => !consumedOld.has(idx)) ?? false;
+  };
+
+  const pushAddedNewRow = (newIdx: number) => {
+    const newRow = newSheet.rows[newIdx];
+    const key = buildKey(newRow, keyColumnIndices);
+    consumedNew.add(newIdx);
+    diffRows.push({
+      viewIndex: viewIndex++,
+      status: "added",
+      key,
+      oldRowNumber: null,
+      newRowNumber: newIdx + 1,
+      oldRow: null,
+      newRow,
+      cellDiffs: [],
+      isOverridden: false,
+      hasDuplicateKey: duplicateKeySet.has(key),
+    });
+  };
+
+  const pushInsertedNewRowsBefore = (limitNewIdx: number) => {
+    for (let ni = 1; ni < limitNewIdx; ni++) {
+      if (consumedNew.has(ni)) continue;
+      const key = buildKey(newSheet.rows[ni], keyColumnIndices);
+      if (keyHasUnconsumedOldRow(key)) continue;
+      pushAddedNewRow(ni);
+    }
+  };
+
   for (let i = 1; i < oldSheet.rows.length; i++) {
     if (consumedOld.has(i)) continue;
     const oldRow = oldSheet.rows[i];
@@ -165,7 +238,7 @@ export function computeDiff(
       if (matchedNewIdx === null) {
         for (const ni of newList) {
           if (!consumedNew.has(ni)) {
-            const candidateDiffs = compareRows(oldRow, newSheet.rows[ni]);
+            const candidateDiffs = compareRows(oldRow, newSheet.rows[ni], i + 1, ni + 1);
             const distance = Math.abs(ni - i);
             if (candidateDiffs.length < bestScore || (candidateDiffs.length === bestScore && distance < bestDistance)) {
               matchedNewIdx = ni;
@@ -179,10 +252,11 @@ export function computeDiff(
     }
 
     if (matchedNewIdx !== null) {
+      pushInsertedNewRowsBefore(matchedNewIdx);
       consumedOld.add(i);
       consumedNew.add(matchedNewIdx);
       const newRow = newSheet.rows[matchedNewIdx];
-      const cellDiffs = matchedCellDiffs ?? compareRows(oldRow, newRow);
+      const cellDiffs = matchedCellDiffs ?? compareRows(oldRow, newRow, i + 1, matchedNewIdx + 1);
       diffRows.push({
         viewIndex: viewIndex++,
         status: cellDiffs.length > 0 ? "modified" : "unchanged",
@@ -196,6 +270,12 @@ export function computeDiff(
         hasDuplicateKey: duplicateKeySet.has(key),
       });
     } else {
+      if (!rowIsEmpty(oldRow)) {
+        const samePositionNewRow = newSheet.rows[i];
+        if (!consumedNew.has(i) && rowIsEmpty(samePositionNewRow)) {
+          consumedNew.add(i);
+        }
+      }
       consumedOld.add(i);
       diffRows.push({
         viewIndex: viewIndex++,
@@ -214,21 +294,7 @@ export function computeDiff(
 
   for (let i = 1; i < newSheet.rows.length; i++) {
     if (consumedNew.has(i)) continue;
-    const newRow = newSheet.rows[i];
-    const key = buildKey(newRow, keyColumnIndices);
-    consumedNew.add(i);
-    diffRows.push({
-      viewIndex: viewIndex++,
-      status: "added",
-      key,
-      oldRowNumber: null,
-      newRowNumber: i + 1,
-      oldRow: null,
-      newRow,
-      cellDiffs: [],
-      isOverridden: false,
-      hasDuplicateKey: duplicateKeySet.has(key),
-    });
+    pushAddedNewRow(i);
   }
 
   const duplicateKeys = Array.from(duplicateKeySet).map((key) => ({

@@ -375,7 +375,8 @@ fn cmd_merge_rows(args: &[String]) -> Result<(), String> {
     std::fs::write(&json_path, serde_json::to_string(&data).unwrap()).map_err(|e| e.to_string())?;
 
     let script = find_write_script()?;
-    let output = std::process::Command::new("python").arg(&script).arg(new_file).arg(&json_path)
+    let (python, python_args) = find_python3()?;
+    let output = std::process::Command::new(&python).args(&python_args).arg(&script).arg(new_file).arg(&json_path)
         .output().map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&json_path);
 
@@ -430,7 +431,8 @@ fn cmd_edit_cell(args: &[String]) -> Result<(), String> {
             std::fs::write(&json_path, serde_json::to_string(&data).unwrap()).map_err(|e| e.to_string())?;
 
             let script = find_write_script()?;
-            let output = std::process::Command::new("python").arg(&script).arg(file).arg(&json_path)
+            let (python, python_args) = find_python3()?;
+            let output = std::process::Command::new(&python).args(&python_args).arg(&script).arg(file).arg(&json_path)
                 .output().map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(&json_path);
 
@@ -459,4 +461,49 @@ fn find_write_script() -> Result<String, String> {
     let src_path = concat!(env!("CARGO_MANIFEST_DIR"), "/write_excel.py");
     if std::path::Path::new(src_path).exists() { return Ok(src_path.to_string()); }
     Err("write_excel.py not found".into())
+}
+
+fn python3_candidates() -> Vec<(&'static str, Vec<&'static str>)> {
+    if cfg!(windows) {
+        vec![
+            ("py", vec!["-3"]),
+            ("python3", vec![]),
+            ("python", vec![]),
+        ]
+    } else {
+        vec![("python3", vec![]), ("python", vec![])]
+    }
+}
+
+fn command_version(program: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .arg("--version")
+        .output()
+        .ok()?;
+
+    let text = if output.stdout.is_empty() {
+        String::from_utf8_lossy(&output.stderr).to_string()
+    } else {
+        String::from_utf8_lossy(&output.stdout).to_string()
+    };
+    Some(text.trim().to_string())
+}
+
+fn find_python3() -> Result<(String, Vec<String>), String> {
+    let mut tried = Vec::new();
+    for (program, args) in python3_candidates() {
+        match command_version(program, &args) {
+            Some(version) if version.starts_with("Python 3.") => {
+                return Ok((
+                    program.to_string(),
+                    args.into_iter().map(String::from).collect(),
+                ));
+            }
+            Some(version) => tried.push(format!("{} {} => {}", program, args.join(" "), version)),
+            None => tried.push(format!("{} {} => not found", program, args.join(" "))),
+        }
+    }
+
+    Err(format!("Python 3 not found. Tried: {}", tried.join("; ")))
 }

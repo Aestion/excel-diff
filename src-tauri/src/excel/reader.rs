@@ -23,7 +23,7 @@ pub fn read_workbook(file_path: &str) -> Result<ParsedWorkbook, String> {
             row.iter().enumerate().map(|(col_idx, cell)| {
                 // Check if there's a formula at this position
                 let formula = formula_range.as_ref()
-                    .and_then(|fr| fr.get((row_idx, col_idx)))
+                    .and_then(|fr| fr.get_value((row_idx as u32, col_idx as u32)))
                     .filter(|f| !f.is_empty())
                     .map(|f| f.clone());
 
