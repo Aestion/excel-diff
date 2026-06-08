@@ -24,3 +24,4 @@ __pycache__/
 
 # Tauri
 src-tauri/target/
+tmp-save-check/
