@@ -9,6 +9,13 @@ vi.mock('../api/tauri', () => ({
   writeExcel: vi.fn(),
   listExcelFiles: vi.fn(),
   detectKeyColumns: vi.fn(),
+  copyExcelFile: vi.fn(),
+  openVcsLog: vi.fn(),
+  openInFileExplorer: vi.fn(),
+  getVcsFileInfo: vi.fn(),
+  getVcsFileLog: vi.fn(),
+  exportVcsFileRevision: vi.fn(),
+  cleanupOldVcsTempExports: vi.fn(),
 }));
 
 vi.mock('../utils/diffEngine', () => ({

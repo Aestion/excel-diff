@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import type { FileEntry, ParsedWorkbook, SheetData } from "../types/excel";
+import type { VcsCommitSummary, VcsFileInfo } from "../types/vcs";
 import * as mock from "./mockTauri";
 
 async function tryReal<T>(realFn: () => Promise<T>, mockFn: () => Promise<T>): Promise<T> {
@@ -135,5 +136,47 @@ export async function getExcelEngineStatus(): Promise<string> {
   return tryReal(
     () => invoke("get_excel_engine_status"),
     () => Promise.resolve("openpyxl")
+  );
+}
+
+export async function openVcsLog(path: string): Promise<void> {
+  return tryReal(
+    () => invoke("open_vcs_log", { path }),
+    () => mock.openVcsLog(path)
+  );
+}
+
+export async function openInFileExplorer(path: string): Promise<void> {
+  return tryReal(
+    () => invoke("open_in_file_explorer", { path }),
+    () => mock.openInFileExplorer(path)
+  );
+}
+
+export async function getVcsFileInfo(path: string): Promise<VcsFileInfo> {
+  return tryReal(
+    () => invoke("get_vcs_file_info", { path }),
+    () => mock.getVcsFileInfo(path)
+  );
+}
+
+export async function getVcsFileLog(path: string, limit = 20): Promise<VcsCommitSummary[]> {
+  return tryReal(
+    () => invoke("get_vcs_file_log", { path, limit }),
+    () => mock.getVcsFileLog(path, limit)
+  );
+}
+
+export async function exportVcsFileRevision(path: string, revision: string): Promise<string> {
+  return tryReal(
+    () => invoke("export_vcs_file_revision", { path, revision }),
+    () => mock.exportVcsFileRevision(path, revision)
+  );
+}
+
+export async function cleanupOldVcsTempExports(maxAgeHours = 24): Promise<void> {
+  return tryReal(
+    () => invoke("cleanup_old_vcs_temp_exports", { maxAgeHours }),
+    () => mock.cleanupOldVcsTempExports(maxAgeHours)
   );
 }

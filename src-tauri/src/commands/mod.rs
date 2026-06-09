@@ -1,10 +1,11 @@
+use crate::excel;
+use crate::models::{FileEntry, ParsedWorkbook, SheetData};
+use crate::vcs;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 use tauri::command;
-use crate::excel;
-use crate::models::{FileEntry, ParsedWorkbook, SheetData};
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,15 +14,20 @@ pub struct FileHash {
     pub hash: String,
 }
 
-fn collect_excel_files(dir: &Path, base: &Path, entries: &mut Vec<FileEntry>) -> Result<(), String> {
+fn collect_excel_files(
+    dir: &Path,
+    base: &Path,
+    entries: &mut Vec<FileEntry>,
+) -> Result<(), String> {
     let extensions = ["xlsx", "xlsm", "xlsb", "xls"];
 
-    let dir_entries = fs::read_dir(dir)
-        .map_err(|e| format!("读取目录 '{}' 失败: {}", dir.display(), e))?;
+    let dir_entries =
+        fs::read_dir(dir).map_err(|e| format!("读取目录 '{}' 失败: {}", dir.display(), e))?;
 
     for entry in dir_entries {
         let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
-        let metadata = entry.metadata()
+        let metadata = entry
+            .metadata()
             .map_err(|e| format!("读取元数据失败: {}", e))?;
 
         let path = entry.path();
@@ -34,7 +40,8 @@ fn collect_excel_files(dir: &Path, base: &Path, entries: &mut Vec<FileEntry>) ->
             let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
 
             if extensions.contains(&ext.as_str()) {
-                let relative = path.strip_prefix(base)
+                let relative = path
+                    .strip_prefix(base)
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .to_string();
@@ -77,13 +84,14 @@ fn fnv1a_file_hash(file_path: &str) -> Result<String, String> {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
 
-    let mut file = fs::File::open(file_path)
-        .map_err(|e| format!("打开文件 '{}' 失败: {}", file_path, e))?;
+    let mut file =
+        fs::File::open(file_path).map_err(|e| format!("打开文件 '{}' 失败: {}", file_path, e))?;
     let mut hash = FNV_OFFSET;
     let mut buffer = [0u8; 64 * 1024];
 
     loop {
-        let len = file.read(&mut buffer)
+        let len = file
+            .read(&mut buffer)
             .map_err(|e| format!("读取文件 '{}' 失败: {}", file_path, e))?;
         if len == 0 {
             break;
@@ -118,8 +126,7 @@ pub async fn copy_excel_file(source_path: String, target_path: String) -> Result
         }
         if let Some(parent) = target.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("创建目标目录失败: {}", e))?;
+                fs::create_dir_all(parent).map_err(|e| format!("创建目标目录失败: {}", e))?;
             }
         }
         fs::copy(source, target)
@@ -136,16 +143,12 @@ pub fn read_excel(file_path: String) -> Result<ParsedWorkbook, String> {
 }
 
 #[command]
-pub async fn write_excel(
-    file_path: String,
-    sheets: Vec<SheetData>,
-) -> Result<(), String> {
+pub async fn write_excel(file_path: String, sheets: Vec<SheetData>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         // Ensure parent directory exists
         if let Some(parent) = Path::new(&file_path).parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("创建目录失败: {}", e))?;
+                fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
             }
         }
         excel::writer::write_workbook(&file_path, &sheets)
@@ -155,10 +158,7 @@ pub async fn write_excel(
 }
 
 #[command]
-pub async fn write_excel_changes(
-    file_path: String,
-    changes_json: String,
-) -> Result<(), String> {
+pub async fn write_excel_changes(file_path: String, changes_json: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         // Pass changes JSON directly to Python script
         excel::writer::write_changes(&file_path, &changes_json)
@@ -168,13 +168,12 @@ pub async fn write_excel_changes(
 }
 
 #[command]
-pub fn detect_key_columns(
-    file_path: String,
-    sheet_name: String,
-) -> Result<Vec<usize>, String> {
+pub fn detect_key_columns(file_path: String, sheet_name: String) -> Result<Vec<usize>, String> {
     let workbook = excel::reader::read_workbook(&file_path)?;
 
-    let sheet = workbook.sheets.iter()
+    let sheet = workbook
+        .sheets
+        .iter()
         .find(|s| s.name == sheet_name)
         .ok_or_else(|| format!("未找到 Sheet '{}'", sheet_name))?;
 
@@ -187,7 +186,9 @@ pub fn detect_key_columns(
 
     for col_idx in 0..col_count {
         // Skip columns with empty/None/fallback headers
-        let header = sheet.columns.get(col_idx)
+        let header = sheet
+            .columns
+            .get(col_idx)
             .map(|c| c.name.trim().to_string())
             .unwrap_or_default();
         if header.is_empty() || header == "None" || header.starts_with("Column ") {
@@ -247,5 +248,39 @@ pub fn get_excel_engine_status() -> Result<String, String> {
     Ok(match crate::excel::engine::current_engine() {
         crate::excel::engine::ExcelEngine::Xlwings => "xlwings",
         crate::excel::engine::ExcelEngine::Openpyxl => "openpyxl",
-    }.to_string())
+    }
+    .to_string())
+}
+
+#[command]
+pub fn open_vcs_log(path: String) -> Result<(), String> {
+    vcs::open_vcs_log(&path)
+}
+
+#[command]
+pub fn open_in_file_explorer(path: String) -> Result<(), String> {
+    vcs::open_in_file_explorer(&path)
+}
+
+#[command]
+pub fn get_vcs_file_info(path: String) -> Result<vcs::VcsFileInfo, String> {
+    vcs::get_vcs_file_info(&path)
+}
+
+#[command]
+pub fn get_vcs_file_log(
+    path: String,
+    limit: Option<usize>,
+) -> Result<Vec<vcs::VcsCommitSummary>, String> {
+    vcs::get_vcs_file_log(&path, limit.unwrap_or(20))
+}
+
+#[command]
+pub fn export_vcs_file_revision(path: String, revision: String) -> Result<String, String> {
+    vcs::export_vcs_file_revision(&path, &revision)
+}
+
+#[command]
+pub fn cleanup_old_vcs_temp_exports(max_age_hours: Option<u64>) -> Result<(), String> {
+    vcs::cleanup_old_temp_exports(max_age_hours.unwrap_or(24))
 }

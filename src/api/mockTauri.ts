@@ -1,4 +1,5 @@
 import type { FileEntry, ParsedWorkbook, SheetData } from "../types/excel";
+import type { VcsCommitSummary, VcsFileInfo } from "../types/vcs";
 import { generateMockFiles, generateMockNewFiles, generateMockWorkbook } from "./mockData";
 
 let _oldDir = "";
@@ -106,6 +107,50 @@ export async function detectKeyColumns(filePath: string, sheetName: string): Pro
   await delay(150);
   // Auto-detect: first column (ID) is typically the key
   return [0];
+}
+
+export async function openVcsLog(path: string): Promise<void> {
+  console.log("[MOCK] Open VCS log:", path);
+  window.alert(`浏览器测试模式无法打开 Tortoise 日志。\n\n真实 Tauri 应用中会打开：\n${path}`);
+}
+
+export async function openInFileExplorer(path: string): Promise<void> {
+  console.log("[MOCK] Open in file explorer:", path);
+  window.alert(`浏览器测试模式无法打开资源管理器。\n\n真实 Tauri 应用中会定位：\n${path}`);
+}
+
+export async function getVcsFileInfo(path: string): Promise<VcsFileInfo> {
+  return {
+    kind: "git",
+    path,
+    root: "C:/Mock",
+    branch: "main",
+    status: "clean",
+    lastCommit: {
+      id: "mock1234",
+      author: "Mock User",
+      date: new Date().toISOString(),
+      message: "Mock version context",
+    },
+  };
+}
+
+export async function getVcsFileLog(path: string, limit = 20): Promise<VcsCommitSummary[]> {
+  return Array.from({ length: Math.min(limit, 3) }, (_, index) => ({
+    id: `mock${index + 1}`,
+    author: "Mock User",
+    date: new Date(Date.now() - index * 86400000).toISOString(),
+    message: `Mock commit for ${path.split(/[\\/]/).pop()}`,
+  }));
+}
+
+export async function exportVcsFileRevision(path: string, revision: string): Promise<string> {
+  console.log("[MOCK] Export VCS revision:", revision, path);
+  return `${path}.mock-${revision}`;
+}
+
+export async function cleanupOldVcsTempExports(maxAgeHours = 24): Promise<void> {
+  console.log("[MOCK] Cleanup VCS temp exports older than hours:", maxAgeHours);
 }
 
 function delay(ms: number): Promise<void> {

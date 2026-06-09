@@ -1,6 +1,7 @@
 mod commands;
 mod excel;
 mod models;
+mod vcs;
 
 fn main() {
     tauri::Builder::default()
@@ -15,6 +16,12 @@ fn main() {
             commands::write_excel_changes,
             commands::detect_key_columns,
             commands::get_excel_engine_status,
+            commands::open_vcs_log,
+            commands::open_in_file_explorer,
+            commands::get_vcs_file_info,
+            commands::get_vcs_file_log,
+            commands::export_vcs_file_revision,
+            commands::cleanup_old_vcs_temp_exports,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

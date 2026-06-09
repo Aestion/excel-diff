@@ -6,9 +6,10 @@ import { rowsEqual } from "../utils/workbookCompare";
 import DiffGrid, { type DiffGridHandle } from "./DiffGrid";
 import KeyColumnSelector from "./KeyColumnSelector";
 import ErrorDialog from "./ErrorDialog";
-import { writeExcel, writeExcelChanges, listExcelFiles, readExcel, pickSavePath, saveTextFile, detectKeyColumns } from "../api/tauri";
+import { writeExcel, writeExcelChanges, listExcelFiles, readExcel, pickSavePath, saveTextFile, detectKeyColumns, getVcsFileInfo, openVcsLog } from "../api/tauri";
 import type { CellValue, Row, SheetData, CellData } from "../types/excel";
 import type { DiffResult, DiffRow } from "../types/diff";
+import type { VcsFileInfo } from "../types/vcs";
 import { BackIcon, UndoIcon, RedoIcon, SaveIcon, ArrowRight, ArrowLeft, FilterIcon, KeyIcon, ChevronDown, FileIcon, ChevronDown as ChevronDownIcon, SearchIcon } from "./Icons";
 
 function getDiffRowRef(row: DiffRow): string {
@@ -101,6 +102,29 @@ function parseEditedCellValue(value: string): { value: CellValue; formula?: stri
 
 const METRICS_UPDATE_INTERVAL_MS = 80;
 
+function formatVcsSummary(info: VcsFileInfo | null): string {
+  if (!info) return "版本信息读取中";
+  if (info.kind === "none") return "未检测到版本库";
+  const source = info.branch || info.revision || info.url || info.root || info.kind;
+  const status = info.status ? ` · ${info.status}` : "";
+  const last = info.lastCommit ? ` · ${info.lastCommit.author ?? "-"}: ${info.lastCommit.message}` : "";
+  return `${info.kind.toUpperCase()} · ${source}${status}${last}`;
+}
+
+function VcsSummaryBadge({ label, path, info, readOnly }: { label: string; path: string | null; info: VcsFileInfo | null; readOnly?: boolean }) {
+  if (!path) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => { void openVcsLog(path); }}
+      className="max-w-[26vw] truncate rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-left text-[11px] text-gray-600 hover:bg-blue-50"
+      title={`${path}\n${formatVcsSummary(info)}`}
+    >
+      <span className="font-semibold">{label}</span> {readOnly ? "只读 · " : ""}{formatVcsSummary(info)}
+    </button>
+  );
+}
+
 export default function DiffView() {
   const {
     selectedFilePair, oldWorkbook, newWorkbook, currentSheet,
@@ -135,6 +159,8 @@ export default function DiffView() {
   const [sheetSummaries, setSheetSummaries] = useState<SheetSummary[]>([]);
   const [leftDirty, setLeftDirty] = useState(false);
   const [rightDirty, setRightDirty] = useState(false);
+  const [leftVcsInfo, setLeftVcsInfo] = useState<VcsFileInfo | null>(null);
+  const [rightVcsInfo, setRightVcsInfo] = useState<VcsFileInfo | null>(null);
   const hasLocalUnsavedChanges = leftDirty || rightDirty;
 
   // Calculate search matches
@@ -288,6 +314,31 @@ export default function DiffView() {
     buildSummaries();
     return () => { cancelled = true; };
   }, [oldWorkbook, newWorkbook, selectedFilePair]);
+
+  const loadVcsInfo = useCallback(async (cancelled: () => boolean) => {
+    const oldPath = selectedFilePair?.oldPath ?? null;
+    const newPath = selectedFilePair?.newPath ?? null;
+    setLeftVcsInfo(oldPath ? null : { kind: "none", path: "" });
+    setRightVcsInfo(newPath ? null : { kind: "none", path: "" });
+
+    const [leftResult, rightResult] = await Promise.allSettled([
+      oldPath ? getVcsFileInfo(oldPath) : Promise.resolve(null),
+      newPath ? getVcsFileInfo(newPath) : Promise.resolve(null),
+    ]);
+    if (cancelled()) return;
+    if (leftResult.status === "fulfilled") setLeftVcsInfo(leftResult.value);
+    if (rightResult.status === "fulfilled") setRightVcsInfo(rightResult.value);
+  }, [selectedFilePair?.newPath, selectedFilePair?.oldPath]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadVcsInfo(() => cancelled);
+    return () => { cancelled = true; };
+  }, [loadVcsInfo]);
+
+  const refreshVcsInfo = useCallback(async () => {
+    await loadVcsInfo(() => false);
+  }, [loadVcsInfo]);
 
   // Find row index
   const findNewRowIndex = useCallback(
@@ -1032,9 +1083,10 @@ export default function DiffView() {
       setRightDirty(false);
       useEditStore.getState().clear();
       markCurrentFileStatus(postSaveDiff?.stats.added === 0 && postSaveDiff.stats.deleted === 0 && postSaveDiff.stats.modified === 0 ? "identical" : "different");
+      await refreshVcsInfo();
       alert("右侧保存成功！");
     } catch (e: any) { setError({ title: "保存失败", message: e?.message || String(e) }); }
-  }, [newWorkbook, effectiveNewRows, selectedFilePair, currentSheet, setEffectiveNewRows, markCurrentFileStatus, diffResult, oldSheet, newSheet, keyColumnIndices]);
+  }, [newWorkbook, effectiveNewRows, selectedFilePair, currentSheet, setEffectiveNewRows, markCurrentFileStatus, diffResult, oldSheet, newSheet, keyColumnIndices, refreshVcsInfo]);
   saveRightRef.current = handleSaveRight;
 
   // Save left side (old data)
@@ -1048,9 +1100,10 @@ export default function DiffView() {
       setLeftDirty(false);
       useEditStore.getState().clear();
       await refreshAndVerifyFilePair(selectedFilePair.relativePath);
+      await refreshVcsInfo();
       alert("左侧保存成功！");
     } catch (e: any) { setError({ title: "保存失败", message: e?.message || String(e) }); }
-  }, [oldWorkbook, selectedFilePair, refreshAndVerifyFilePair]);
+  }, [oldWorkbook, selectedFilePair, refreshAndVerifyFilePair, refreshVcsInfo]);
 
   // Export diff report as CSV
   const handleExport = useCallback(async () => {
@@ -1192,6 +1245,13 @@ export default function DiffView() {
           <BackIcon size={14} /> 文件夹
         </button>
         <span className="font-mono font-semibold mr-4">{selectedFilePair.filename}</span>
+        <VcsSummaryBadge label="左" path={selectedFilePair.oldPath} info={leftVcsInfo} readOnly={selectedFilePair.oldReadOnly} />
+        <VcsSummaryBadge label="右" path={selectedFilePair.newPath} info={rightVcsInfo} readOnly={selectedFilePair.newReadOnly} />
+        {selectedFilePair.compareNote && (
+          <span className="max-w-[22vw] truncate text-[11px] text-amber-700" title={selectedFilePair.compareNote}>
+            {selectedFilePair.compareNote}
+          </span>
+        )}
         {sheetSummaries.length > 1 && (
           <div className="flex items-center border rounded px-2 py-0.5 text-xs mr-3 hover:bg-gray-50">
             <select value={currentSheet} onChange={(e) => { void handleSheetChange(e.target.value); }}
@@ -1260,7 +1320,7 @@ export default function DiffView() {
             className="flex items-center gap-1 px-2 py-0.5 rounded disabled:opacity-30 hover:bg-gray-100">
             <RedoIcon size={13} /> 重做
           </button>
-          {selectedFilePair.oldPath && (
+          {selectedFilePair.oldPath && !selectedFilePair.oldReadOnly && (
             <button onClick={handleSaveLeft}
               className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500 text-white hover:bg-amber-600"
               title={leftDirty ? "左侧有未保存修改" : "保存左侧"}>
@@ -1358,7 +1418,7 @@ export default function DiffView() {
       <div className="flex-1 flex overflow-hidden relative pr-6">
         <div className="flex-1 border-r">
           <DiffGrid ref={oldGridRef} side="old" diffResult={diffResult} columns={oldSheet?.columns ?? []}
-            onCellEdit={handleLeftCellEdit} onSelectionChanged={setLeftSelected} filter={filter}
+            onCellEdit={selectedFilePair.oldReadOnly ? undefined : handleLeftCellEdit} onSelectionChanged={setLeftSelected} filter={filter}
             onScroll={handleGridScroll}
             columnWidths={columnWidths} onColumnWidthsChange={setColumnWidths}
             searchText={searchText} searchMatches={searchMatches} currentMatchIndex={currentMatchIndex}

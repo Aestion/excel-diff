@@ -8,6 +8,16 @@ pub enum ExcelEngine {
 }
 
 fn detect() -> ExcelEngine {
+    match std::env::var("EXCEL_DIFF_ENGINE")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "openpyxl" => return ExcelEngine::Openpyxl,
+        "xlwings" => return ExcelEngine::Xlwings,
+        _ => {}
+    }
+
     // Non-Windows: always use openpyxl
     if !cfg!(target_os = "windows") {
         return ExcelEngine::Openpyxl;

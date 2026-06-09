@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useDiffStore } from "../stores/diffStore";
-import { readExcel, detectKeyColumns, copyExcelFile, listExcelFiles } from "../api/tauri";
+import { readExcel, detectKeyColumns, copyExcelFile, listExcelFiles, openVcsLog, openInFileExplorer, getVcsFileInfo, getVcsFileLog, exportVcsFileRevision, cleanupOldVcsTempExports } from "../api/tauri";
 import { computeDiff } from "../utils/diffEngine";
 import type { FilePair } from "../types/excel";
+import type { VcsCommitSummary, VcsFileInfo } from "../types/vcs";
+import VcsLogDialog from "./VcsLogDialog";
 import { RefreshIcon, ArrowRight, ArrowLeft, SpinnerIcon, FolderIcon, ChevronDown } from "./Icons";
 
 function formatSize(bytes: number): string {
@@ -121,11 +123,39 @@ function buildFileTree(pairs: FilePair[]): FileTreeNode {
   return root;
 }
 
+function joinDirectoryPath(baseDir: string, relativePath: string): string {
+  if (!relativePath) return baseDir;
+  const separator = baseDir.includes("\\") ? "\\" : "/";
+  const normalizedRelative = relativePath.replace(/[\\/]+/g, separator);
+  return baseDir.endsWith("\\") || baseDir.endsWith("/")
+    ? `${baseDir}${normalizedRelative}`
+    : `${baseDir}${separator}${normalizedRelative}`;
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
 // Context menu
 interface ContextMenuState {
   x: number;
   y: number;
   side: "left" | "right";
+  targetKind: "file" | "folder";
+  targetPath: string;
+  relativePath: string;
   paths: string[];
 }
 
@@ -143,15 +173,37 @@ function ContextMenu({ state, onAction, onClose }: {
 
   const count = state.paths.length;
   const isLeft = state.side === "left";
+  const isFile = state.targetKind === "file";
 
   return (
     <div ref={ref} className="fixed bg-white rounded-lg shadow-xl border py-1 z-50 min-w-[180px]"
       style={{ left: state.x, top: state.y }}>
       <div className="px-3 py-1.5 text-[11px] text-gray-400 border-b">
-        已选 {count} 个文件 · {isLeft ? "左侧" : "右侧"}
+        {isFile ? `已选 ${count} 个文件` : "文件夹"} · {isLeft ? "左侧" : "右侧"}
       </div>
-      {isLeft ? (
+      <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+        onClick={() => onAction("show-vcs-log")}>
+        查看版本记录
+      </button>
+      <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+        onClick={() => onAction("open-vcs-log")}>
+        用 Tortoise 打开日志
+      </button>
+      <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+        onClick={() => onAction("open-explorer")}>
+        在资源管理器中定位
+      </button>
+      <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+        onClick={() => onAction("copy-path")}>
+        复制路径
+      </button>
+      {isFile && <div className="my-1 border-t" />}
+      {isFile && isLeft ? (
         <>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+            onClick={() => onAction("compare-history")}>
+            与历史版本比较
+          </button>
           <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
             onClick={() => onAction("copy-left-to-right")}>
             <ArrowRight size={14} className="text-blue-500" />
@@ -162,8 +214,12 @@ function ContextMenu({ state, onAction, onClose }: {
             打开对比
           </button>
         </>
-      ) : (
+      ) : isFile ? (
         <>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+            onClick={() => onAction("compare-history")}>
+            与历史版本比较
+          </button>
           <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-purple-50 flex items-center gap-2"
             onClick={() => onAction("copy-right-to-left")}>
             <ArrowLeft size={14} className="text-purple-500" />
@@ -174,7 +230,7 @@ function ContextMenu({ state, onAction, onClose }: {
             打开对比
           </button>
         </>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -186,7 +242,7 @@ function TreeFileRow({ pair, side, level, selected, onSelect, onDoubleClick, onC
   selected: Set<string>;
   onSelect: (path: string, e: React.MouseEvent) => void;
   onDoubleClick: (pair: FilePair) => void;
-  onContextMenu: (e: React.MouseEvent, side: "left" | "right", path?: string) => void;
+  onContextMenu: (e: React.MouseEvent, side: "left" | "right", path: string, kind: "file" | "folder") => void;
 }) {
   const getSize = (p: FilePair) => side === "left" ? p.oldSize : p.newSize;
   const getModifiedAt = (p: FilePair) => side === "left" ? p.oldModifiedAt : p.newModifiedAt;
@@ -229,7 +285,7 @@ function TreeFileRow({ pair, side, level, selected, onSelect, onDoubleClick, onC
       style={{ paddingLeft }}
       onClick={(e) => onSelect(pair.relativePath, e)}
       onDoubleClick={() => onDoubleClick(pair)}
-      onContextMenu={(e) => onContextMenu(e, side, pair.relativePath)}>
+      onContextMenu={(e) => onContextMenu(e, side, pair.relativePath, "file")}>
       <span className="w-3 mr-1">
         {isSelected && <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-600" />}
       </span>
@@ -247,7 +303,7 @@ function TreeFolderNode({ node, side, level, selected, onSelect, onDoubleClick, 
   selected: Set<string>;
   onSelect: (path: string, e: React.MouseEvent) => void;
   onDoubleClick: (pair: FilePair) => void;
-  onContextMenu: (e: React.MouseEvent, side: "left" | "right", path?: string) => void;
+  onContextMenu: (e: React.MouseEvent, side: "left" | "right", path: string, kind: "file" | "folder") => void;
   collapsedFolders: Set<string>;
   onToggle: (dir: string) => void;
 }) {
@@ -260,7 +316,8 @@ function TreeFolderNode({ node, side, level, selected, onSelect, onDoubleClick, 
       {!isRoot && (
         <div className="flex items-center pr-2 h-7 bg-gray-50 border-b cursor-pointer hover:bg-gray-100 select-none"
           style={{ paddingLeft }}
-          onClick={() => onToggle(node.path)}>
+          onClick={() => onToggle(node.path)}
+          onContextMenu={(e) => onContextMenu(e, side, node.path, "folder")}>
           <span className={`transform transition-transform ${collapsed ? "" : "rotate-90"}`}>
             <ChevronDown size={12} className="text-gray-400" />
           </span>
@@ -311,6 +368,14 @@ export default function FileList() {
   const [filenameFilter, setFilenameFilter] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [vcsDialog, setVcsDialog] = useState<{
+    title: string;
+    path: string;
+    info: VcsFileInfo | null;
+    logs: VcsCommitSummary[];
+    loading: boolean;
+    error?: string;
+  } | null>(null);
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const syncingScrollRef = useRef(false);
@@ -502,26 +567,138 @@ export default function FileList() {
   filePairsRef.current = filePairs;
 
   // Right click → context menu
-  const handleContextMenu = useCallback((e: React.MouseEvent, side: "left" | "right", path?: string) => {
+  const resolveContextTarget = useCallback((side: "left" | "right", path: string, kind: "file" | "folder"): string | null => {
+    if (kind === "folder") {
+      const baseDir = side === "left" ? oldDir : newDir;
+      return baseDir ? joinDirectoryPath(baseDir, path) : null;
+    }
+
+    const pair = filePairs.find((p) => p.relativePath === path);
+    return side === "left" ? pair?.oldPath ?? null : pair?.newPath ?? null;
+  }, [filePairs, newDir, oldDir]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, side: "left" | "right", path = "", kind: "file" | "folder" = "folder") => {
     e.preventDefault();
-    const paths = path && !selectedPaths.has(path)
+    e.stopPropagation();
+    const targetPath = resolveContextTarget(side, path, kind);
+    if (!targetPath) return;
+
+    const paths = kind === "file" && path && !selectedPaths.has(path)
       ? [path]
-      : selectedPaths.size > 0
+      : kind === "file" && selectedPaths.size > 0
         ? Array.from(selectedPaths)
         : path
           ? [path]
           : [];
-    if (path && !selectedPaths.has(path)) {
+    if (kind === "file" && path && !selectedPaths.has(path)) {
       setSelectedPaths(new Set([path]));
     }
-    setContextMenu({ x: e.clientX, y: e.clientY, side, paths });
-  }, [selectedPaths]);
+    setContextMenu({ x: e.clientX, y: e.clientY, side, targetKind: kind, targetPath, relativePath: path, paths });
+  }, [resolveContextTarget, selectedPaths]);
 
   // Context menu action
   const handleContextAction = useCallback(async (action: string) => {
     if (!contextMenu) return;
     const paths = contextMenu.paths;
     setContextMenu(null);
+
+    if (action === "show-vcs-log") {
+      const targetPath = contextMenu.targetPath;
+      setVcsDialog({
+        title: contextMenu.targetKind === "folder" ? "目录版本记录" : "文件版本记录",
+        path: targetPath,
+        info: null,
+        logs: [],
+        loading: true,
+      });
+      try {
+        const info = await getVcsFileInfo(targetPath);
+        const logs = info.kind === "none" ? [] : await getVcsFileLog(targetPath, 20);
+        setVcsDialog({
+          title: contextMenu.targetKind === "folder" ? "目录版本记录" : "文件版本记录",
+          path: targetPath,
+          info,
+          logs,
+          loading: false,
+        });
+      } catch (e: any) {
+        setVcsDialog((state) => state ? {
+          ...state,
+          loading: false,
+          error: e?.message || String(e),
+        } : null);
+      }
+      return;
+    }
+
+    if (action === "open-vcs-log") {
+      try {
+        await openVcsLog(contextMenu.targetPath);
+      } catch (e: any) {
+        alert(`打开版本记录失败: ${e?.message || String(e)}`);
+      }
+      return;
+    }
+
+    if (action === "compare-history") {
+      const pair = paths.length === 1 ? filePairs.find(p => p.relativePath === paths[0]) : null;
+      if (!pair) return;
+      const currentPath = contextMenu.targetPath;
+      const revision = window.prompt("输入要比较的 commit/revision：");
+      if (!revision) return;
+      try {
+        await cleanupOldVcsTempExports(24);
+        const historyPath = await exportVcsFileRevision(currentPath, revision.trim());
+        const [historyWb, currentWb] = await Promise.all([
+          readExcel(historyPath),
+          readExcel(currentPath),
+        ]);
+        const commonSheets = historyWb.sheetNames.filter(s => currentWb.sheetNames.includes(s));
+        const sheetName = commonSheets[0] || historyWb.sheetNames[0] || currentWb.sheetNames[0] || "";
+        setOldWorkbook(historyWb);
+        setNewWorkbook(currentWb);
+        setCurrentSheet(sheetName);
+        selectFilePair({
+          ...pair,
+          oldPath: historyPath,
+          newPath: currentPath,
+          status: "matched",
+          diffStatus: "unknown",
+          filename: `${pair.filename} @ ${revision.trim()}`,
+          oldReadOnly: true,
+          compareNote: `左侧为历史版本 ${revision.trim()} 的临时只读文件`,
+        });
+        if (sheetName) {
+          const keyCols = await detectKeyColumns(currentPath, sheetName);
+          setKeyColumnIndices(keyCols);
+          const os = historyWb.sheets.find(s => s.name === sheetName);
+          const ns = currentWb.sheets.find(s => s.name === sheetName);
+          if (os && ns) setDiffResult(computeDiff(os, ns, keyCols));
+        }
+        setView("diff");
+      } catch (e: any) {
+        alert(`历史版本比较失败: ${e?.message || String(e)}`);
+      }
+      return;
+    }
+
+    if (action === "open-explorer") {
+      try {
+        await openInFileExplorer(contextMenu.targetPath);
+      } catch (e: any) {
+        alert(`打开资源管理器失败: ${e?.message || String(e)}`);
+      }
+      return;
+    }
+
+    if (action === "copy-path") {
+      try {
+        await copyTextToClipboard(contextMenu.targetPath);
+      } catch (e: any) {
+        alert(`复制路径失败: ${e?.message || String(e)}`);
+      }
+      return;
+    }
 
     if (action === "open-diff" && paths.length === 1) {
       const pair = filePairs.find(p => p.relativePath === paths[0]);
@@ -582,7 +759,7 @@ export default function FileList() {
         })();
       }, 0);
     }
-  }, [contextMenu, filePairs, handleOpen]);
+  }, [contextMenu, detectKeyColumns, filePairs, handleOpen, selectFilePair, setCurrentSheet, setDiffResult, setKeyColumnIndices, setNewWorkbook, setOldWorkbook, setView]);
 
   // Keyboard — register once, read latest values via refs
   useEffect(() => {
@@ -671,7 +848,7 @@ export default function FileList() {
         {/* Left */}
         <div ref={leftPanelRef} className="flex-1 border-r overflow-auto"
           onScroll={() => handlePanelScroll("left")}
-          onContextMenu={(e) => { e.preventDefault(); if (selectedPaths.size > 0) handleContextMenu(e, "left"); }}>
+          onContextMenu={(e) => handleContextMenu(e, "left", "", "folder")}>
           <div className="sticky top-0 bg-gray-100 px-4 py-1 text-xs font-mono border-b z-10 text-gray-600">
             {oldDir || "(未选择)"}
           </div>
@@ -690,7 +867,7 @@ export default function FileList() {
         {/* Right */}
         <div ref={rightPanelRef} className="flex-1 overflow-auto"
           onScroll={() => handlePanelScroll("right")}
-          onContextMenu={(e) => { e.preventDefault(); if (selectedPaths.size > 0) handleContextMenu(e, "right"); }}>
+          onContextMenu={(e) => handleContextMenu(e, "right", "", "folder")}>
           <div className="sticky top-0 bg-gray-100 px-4 py-1 text-xs font-mono border-b z-10 text-gray-600">
             {newDir || "(未选择)"}
           </div>
@@ -729,6 +906,17 @@ export default function FileList() {
       {contextMenu && (
         <ContextMenu state={contextMenu} onAction={handleContextAction}
           onClose={() => setContextMenu(null)} />
+      )}
+      {vcsDialog && (
+        <VcsLogDialog
+          title={vcsDialog.title}
+          info={vcsDialog.info}
+          logs={vcsDialog.logs}
+          loading={vcsDialog.loading}
+          error={vcsDialog.error}
+          onClose={() => setVcsDialog(null)}
+          onOpenExternal={() => { void openVcsLog(vcsDialog.path); }}
+        />
       )}
     </div>
   );

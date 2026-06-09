@@ -11,17 +11,18 @@
 import subprocess, json, os, sys, shutil, tempfile
 
 CLI_DIR = os.path.join(os.path.dirname(__file__), '..', 'src-tauri')
-CLI = os.path.join(CLI_DIR, 'target', 'debug', 'excel-diff-cli.exe')
+CLI = os.path.join(CLI_DIR, 'target', 'debug', 'ExcelDiffCli.exe')
 if not os.path.exists(CLI):
-    CLI = os.path.join(CLI_DIR, 'target', 'debug', 'excel-diff-cli')
+    CLI = os.path.join(CLI_DIR, 'target', 'debug', 'ExcelDiffCli')
 
 TEST_DIR = tempfile.mkdtemp(prefix='excel-diff-test-')
 passed = 0
 failed = 0
 results = []
+CLI_ENV = {**os.environ, 'EXCEL_DIFF_ENGINE': 'openpyxl'}
 
 def run_cli(*args):
-    r = subprocess.run([CLI] + list(args), capture_output=True, text=True, cwd=CLI_DIR)
+    r = subprocess.run([CLI] + list(args), capture_output=True, text=True, cwd=CLI_DIR, env=CLI_ENV)
     if r.returncode != 0:
         raise Exception(r.stderr.strip())
     return r.stdout.strip()
@@ -63,6 +64,9 @@ def assert_contains(actual, expected_subset, msg=""):
     for k, v in expected_subset.items():
         if actual.get(k) != v:
             raise AssertionError(f"{msg}: {k} expected {v}, got {actual.get(k)}")
+
+def cell_value(cell):
+    return cell.get('value') if isinstance(cell, dict) else cell
 
 # ========================================
 # Test Data Setup
@@ -182,14 +186,14 @@ def test_merge_single_modified_row():
 
     # Before: Bob's salary is 85 in new
     before = run_cli_json('read', target)
-    assert_eq(before['sheets'][0]['rows'][2][3], 85, 'Bob salary before merge')
+    assert_eq(cell_value(before['sheets'][0]['rows'][2][3]), 85, 'Bob salary before merge')
 
     # Merge Bob (key=2) from old to new
     run_cli('merge-rows', f'{TEST_DIR}/base_old.xlsx', target, '--key', '0', '--keys', '2')
 
     # After: Bob's salary should be 80
     after = run_cli_json('read', target)
-    assert_eq(after['sheets'][0]['rows'][2][3], 80, 'Bob salary after merge')
+    assert_eq(cell_value(after['sheets'][0]['rows'][2][3]), 80, 'Bob salary after merge')
 
     # Diff should show Bob as unchanged now
     s = diff_stats(f'{TEST_DIR}/base_old.xlsx', target, 0)
@@ -204,7 +208,7 @@ def test_merge_multiple_rows():
     run_cli('merge-rows', f'{TEST_DIR}/base_old.xlsx', target, '--key', '0', '--keys', '2,5')
 
     after = run_cli_json('read', target)
-    assert_eq(after['sheets'][0]['rows'][2][3], 80, 'Bob salary after multi-merge')
+    assert_eq(cell_value(after['sheets'][0]['rows'][2][3]), 80, 'Bob salary after multi-merge')
 
 def test_merge_insert_deleted_row():
     """通过合并实现"插入删除行"：把 old 中 Charlie 复制到 new"""
@@ -213,7 +217,7 @@ def test_merge_insert_deleted_row():
 
     # New doesn't have Charlie (ID=3)
     before = run_cli_json('read', target)
-    ids_before = [r[0] for r in before['sheets'][0]['rows'][1:]]
+    ids_before = [cell_value(r[0]) for r in before['sheets'][0]['rows'][1:]]
     assert 3.0 not in ids_before, 'Charlie should not exist before'
 
     # Write old data entirely to new (simulates "insert all deleted")
@@ -227,7 +231,7 @@ def test_merge_insert_deleted_row():
     run_cli('write', target, '--json', f'{TEST_DIR}/_insert.json')
 
     after = run_cli_json('read', target)
-    ids_after = [r[0] for r in after['sheets'][0]['rows'][1:]]
+    ids_after = [cell_value(r[0]) for r in after['sheets'][0]['rows'][1:]]
     assert 3.0 in ids_after, 'Charlie should exist after insert'
 
     # Diff should show no differences
@@ -261,7 +265,7 @@ def test_edit_cell():
     run_cli('edit-cell', target, '--key', '0', '--row', '2', '--col', '3', '--val', '99')
 
     after = run_cli_json('read', target)
-    assert_eq(after['sheets'][0]['rows'][2][3], 99, 'salary after edit')
+    assert_eq(cell_value(after['sheets'][0]['rows'][2][3]), 99, 'salary after edit')
 
 def test_edit_cell_then_diff():
     """编辑后 diff 应该反映变化"""
@@ -366,8 +370,8 @@ if __name__ == '__main__':
 
     # Build
     print('\nBuilding...')
-    r = subprocess.run(['cargo', 'build', '--bin', 'excel-diff-cli'],
-        cwd=CLI_DIR, capture_output=True, text=True)
+    r = subprocess.run(['cargo', 'build', '--bin', 'ExcelDiffCli'],
+        cwd=CLI_DIR, capture_output=True, text=True, env=CLI_ENV)
     if r.returncode != 0:
         print(f'Build failed: {r.stderr}')
         sys.exit(1)

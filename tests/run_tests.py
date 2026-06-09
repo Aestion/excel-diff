@@ -15,9 +15,9 @@ import os
 import sys
 import shutil
 
-CLI = os.path.join(os.path.dirname(__file__), '..', 'src-tauri', 'target', 'debug', 'excel-diff-cli.exe')
+CLI = os.path.join(os.path.dirname(__file__), '..', 'src-tauri', 'target', 'debug', 'ExcelDiffCli.exe')
 if not os.path.exists(CLI):
-    CLI = os.path.join(os.path.dirname(__file__), '..', 'src-tauri', 'target', 'debug', 'excel-diff-cli')
+    CLI = os.path.join(os.path.dirname(__file__), '..', 'src-tauri', 'target', 'debug', 'ExcelDiffCli')
 
 TEST_DIR = os.path.join(os.environ.get('TEMP', '/tmp'), 'excel-diff-test')
 OLD_DIR = os.path.join(TEST_DIR, 'old')
@@ -25,9 +25,10 @@ NEW_DIR = os.path.join(TEST_DIR, 'new')
 
 passed = 0
 failed = 0
+CLI_ENV = {**os.environ, 'EXCEL_DIFF_ENGINE': 'openpyxl'}
 
 def run_cli(*args):
-    result = subprocess.run([CLI] + list(args), capture_output=True, text=True)
+    result = subprocess.run([CLI] + list(args), capture_output=True, text=True, env=CLI_ENV)
     if result.returncode != 0:
         raise Exception(f"CLI failed: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -176,9 +177,9 @@ if __name__ == '__main__':
     # Build CLI first
     print("\nBuilding CLI...")
     build_result = subprocess.run(
-        ['cargo', 'build', '--bin', 'excel-diff-cli'],
+        ['cargo', 'build', '--bin', 'ExcelDiffCli'],
         cwd=os.path.join(os.path.dirname(__file__), '..', 'src-tauri'),
-        capture_output=True, text=True
+        capture_output=True, text=True, env=CLI_ENV
     )
     if build_result.returncode != 0:
         print(f"Build failed:\n{build_result.stderr}")

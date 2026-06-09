@@ -47,4 +47,7 @@ export interface FilePair {
   newModifiedAt?: number;
   status: FileMatchStatus;
   diffStatus: DiffStatus;
+  oldReadOnly?: boolean;
+  newReadOnly?: boolean;
+  compareNote?: string;
 }
