@@ -7,7 +7,17 @@ Excel writer using openpyxl — supports BOTH modes:
 """
 import sys
 import json
-import openpyxl
+
+try:
+    import openpyxl
+except ImportError:
+    print(
+        "Missing Python dependency: openpyxl\n"
+        "Install it with:\n"
+        "  python -m pip install openpyxl",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def is_empty(v):
@@ -161,7 +171,8 @@ def main():
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    wb = openpyxl.load_workbook(file_path)
+    keep_vba = file_path.lower().endswith('.xlsm')
+    wb = openpyxl.load_workbook(file_path, keep_vba=keep_vba)
 
     mode = detect_mode(data)
     if mode == 'full':

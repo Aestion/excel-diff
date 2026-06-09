@@ -5,7 +5,19 @@ Supports the same JSON input format as write_excel.py
 """
 import sys
 import json
-import xlwings as xw
+
+try:
+    import xlwings as xw
+except ImportError:
+    print(
+        "Missing Python dependency: xlwings\n"
+        "Install it with:\n"
+        "  python -m pip install xlwings\n"
+        "\n"
+        "Note: xlwings also requires Microsoft Excel installed on Windows.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def is_empty(v):

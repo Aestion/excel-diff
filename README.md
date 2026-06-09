@@ -68,7 +68,9 @@
 **前置要求：**
 - Node.js 18+
 - Rust 1.70+
-- Python 3.8+（用于 Excel 写入）
+- Windows 构建 MSI/NSIS 需要 Visual Studio 2022 的“使用 C++ 的桌面开发”工作负载
+- Python 3.8+（开发/构建时用于准备内置 Excel 写入运行时）
+- openpyxl 3.1+（普通用户由安装包内置；开发环境可使用系统 Python 作为备用）
 - Tauri CLI
 
 ```bash
@@ -76,8 +78,17 @@
 git clone https://github.com/Aestion/excel-diff.git
 cd excel-diff
 
-# 安装依赖
+# 安装前端依赖
 npm install
+
+# 安装 Python 写入依赖（开发模式备用）
+# Windows
+py -3 -m pip install -r src-tauri/requirements.txt
+# macOS / Linux
+python3 -m pip install -r src-tauri/requirements.txt
+
+# Windows 发布包构建前，准备内置 Python + openpyxl 运行时
+npm run prepare:python:windows
 
 # 开发模式
 npm run tauri dev
@@ -190,9 +201,84 @@ excel-diff/
 - **文本规范化**：自动处理换行符差异（`\r\n` vs `\n`）
 - **重复键检测**：自动识别关键列重复的行，避免误匹配
 
+## Excel 写入依赖与故障排除
+
+保存 Excel 修改时，Windows 安装包会优先调用随软件内置的私有 Python 运行时和 openpyxl；如果内置运行时不存在（例如开发模式或非 Windows），再回退到系统 Python。
+
+### 兼容版本
+
+- Python 3.8+
+- openpyxl 3.1+
+
+### 安装依赖
+
+Windows：
+
+```bash
+py -3 -m pip install openpyxl
+```
+
+macOS / Linux：
+
+```bash
+python3 -m pip install openpyxl
+```
+
+也可以在源码目录中使用依赖文件安装：
+
+```bash
+py -3 -m pip install -r src-tauri/requirements.txt
+```
+
+### 常见错误
+
+如果保存时报错：
+
+```text
+No module named 'openpyxl'
+```
+
+**Windows 正式版用户**：该错误理论上不会出现，因为安装包已经内置 Python 和 openpyxl。如遇此错误，请重新安装或联系开发人员。
+
+**开发模式 / macOS / Linux 用户**：说明当前系统 Python 环境没有安装 openpyxl。请执行：
+
+```bash
+py -3 -m pip install openpyxl
+```
+
+如果你的系统使用 `python3` 命令，请改用：
+
+```bash
+python3 -m pip install openpyxl
+```
+
+Windows 上可选安装 xlwings 写入引擎（需要 Microsoft Excel）：
+
+```bash
+py -3 -m pip install -r src-tauri/requirements-optional.txt
+```
+
+### 准备 Windows 内置 Python 运行时
+
+发布 Windows 安装包前，在源码目录执行：
+
+```bash
+npm run prepare:python:windows
+npm run tauri build
+```
+
+脚本会下载官方 Windows embeddable Python，并把 `requirements.txt` 中的 openpyxl 安装到 `src-tauri/resources/python-windows/`。该目录会被 Tauri 打包进安装包，但生成的运行时文件不会提交到 Git。
+
+构建成功后会生成：
+
+- NSIS：`src-tauri/target/release/bundle/nsis/Excel Diff_1.0.0_x64-setup.exe`
+- MSI：`src-tauri/target/release/bundle/msi/Excel Diff_1.0.0_x64_en-US.msi`
+
+如果在 Git Bash/VSCode 终端里构建时误用了 `C:\Program Files\Git\usr\bin\link.exe`，请在 Visual Studio Developer Command Prompt 中构建，或确保 MSVC 的 `link.exe` 位于 PATH 前面。
+
 ## 已知限制
 
-- Excel 写入依赖 Python，需要安装 Python 3.8+
+- Windows 正式版内置 Python 3.12 + openpyxl 3.1+；开发模式/非 Windows 回退到系统 Python 3.8+ 和 openpyxl 3.1+
 - 不支持 .xls 格式（仅支持 .xlsx, .xlsm, .xlsb）
 - 大型文件（>10MB）对比可能较慢
 - 合并操作会覆盖目标文件，建议先备份

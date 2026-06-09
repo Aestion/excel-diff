@@ -1,0 +1,2 @@
+# Windows xlwings engine; requires Microsoft Excel installed.
+xlwings>=0.30

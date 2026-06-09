@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "prepare:python:windows": "cd src-tauri && py -3 prepare_bundled_python.py",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -18,6 +18,8 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+src-tauri/resources/python-windows/*
+!src-tauri/resources/python-windows/.gitkeep
 
 # Logs
 *.log
