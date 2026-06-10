@@ -171,8 +171,8 @@ export function computeDiff(
   const consumedNew = new Set<number>();
   const duplicateKeySet = new Set<RowKey>();
   for (const key of new Set([...oldByKey.keys(), ...newByKey.keys()])) {
-    const oldCount = oldByKey.get(key)?.length ?? 0;
-    const newCount = newByKey.get(key)?.length ?? 0;
+    const oldCount = oldByKey.get(key)?.filter((idx) => !rowIsEmpty(oldSheet.rows[idx])).length ?? 0;
+    const newCount = newByKey.get(key)?.filter((idx) => !rowIsEmpty(newSheet.rows[idx])).length ?? 0;
     if (oldCount > 1 || newCount > 1) duplicateKeySet.add(key);
   }
 
@@ -187,6 +187,7 @@ export function computeDiff(
     const newRow = newSheet.rows[newIdx];
     const key = buildKey(newRow, keyColumnIndices);
     consumedNew.add(newIdx);
+    if (rowIsEmpty(newRow)) return;
     diffRows.push({
       viewIndex: viewIndex++,
       status: "added",
@@ -270,11 +271,17 @@ export function computeDiff(
         hasDuplicateKey: duplicateKeySet.has(key),
       });
     } else {
-      if (!rowIsEmpty(oldRow)) {
+      if (rowIsEmpty(oldRow)) {
         const samePositionNewRow = newSheet.rows[i];
         if (!consumedNew.has(i) && rowIsEmpty(samePositionNewRow)) {
           consumedNew.add(i);
         }
+        consumedOld.add(i);
+        continue;
+      }
+      const samePositionNewRow = newSheet.rows[i];
+      if (!consumedNew.has(i) && rowIsEmpty(samePositionNewRow)) {
+        consumedNew.add(i);
       }
       consumedOld.add(i);
       diffRows.push({

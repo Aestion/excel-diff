@@ -774,9 +774,10 @@ dependencies = [
 
 [[package]]
 name = "excel-diff"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "calamine",
+ "encoding_rs",
  "serde",
  "serde_json",
  "tauri",

@@ -172,6 +172,30 @@ describe('computeDiff', () => {
     ]);
   });
 
+  it('ignores unmatched empty rows instead of reporting them as differences', () => {
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      [null, null],
+      [null, null],
+      ['2', 'Bob'],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Alice'],
+      [null, null],
+      ['2', 'Bob'],
+      [null, null],
+      [null, null],
+    ]);
+
+    const result = computeDiff(oldSheet, newSheet, [0]);
+
+    expect(result.stats.added).toBe(0);
+    expect(result.stats.deleted).toBe(0);
+    expect(result.stats.modified).toBe(0);
+    expect(result.duplicateKeys).toEqual([]);
+    expect(result.diffRows.every((row) => row.status === 'unchanged')).toBe(true);
+  });
+
   it('does not treat moved rows as inserted while interleaving additions', () => {
     const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
       ['1', 'Alice'],

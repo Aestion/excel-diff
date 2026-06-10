@@ -6,6 +6,7 @@ import { rowsEqual } from "../utils/workbookCompare";
 import DiffGrid, { type DiffGridHandle } from "./DiffGrid";
 import KeyColumnSelector from "./KeyColumnSelector";
 import ErrorDialog from "./ErrorDialog";
+import VersionCompareDialog from "./VersionCompareDialog";
 import { writeExcel, writeExcelChanges, listExcelFiles, readExcel, pickSavePath, saveTextFile, detectKeyColumns, getVcsFileInfo, openVcsLog } from "../api/tauri";
 import type { CellValue, Row, SheetData, CellData } from "../types/excel";
 import type { DiffResult, DiffRow } from "../types/diff";
@@ -59,6 +60,7 @@ type DetailEditState = {
 
 const RIGHT_ROWS_SNAPSHOT = -10;
 const LEFT_ROWS_SNAPSHOT = -11;
+const ACTION_COLUMN_CLASS = "w-20";
 
 function shouldCopyLeftToRight(row: DiffRow, mode: CopyMode): boolean {
   if (mode === "added") return row.status === "deleted";
@@ -107,20 +109,52 @@ function formatVcsSummary(info: VcsFileInfo | null): string {
   if (info.kind === "none") return "未检测到版本库";
   const source = info.branch || info.revision || info.url || info.root || info.kind;
   const status = info.status ? ` · ${info.status}` : "";
-  const last = info.lastCommit ? ` · ${info.lastCommit.author ?? "-"}: ${info.lastCommit.message}` : "";
+  const last = info.lastCommit ? ` · ${info.lastCommit.author ?? "-"} · ${formatVcsDate(info.lastCommit.date)} · ${info.lastCommit.message}` : "";
   return `${info.kind.toUpperCase()} · ${source}${status}${last}`;
+}
+
+function formatVcsDate(value?: string): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.replace(/:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/, "");
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
 function VcsSummaryBadge({ label, path, info, readOnly }: { label: string; path: string | null; info: VcsFileInfo | null; readOnly?: boolean }) {
   if (!path) return null;
+  const source = info && info.kind !== "none" ? (info.revision || info.branch || info.url || info.root || info.kind) : "";
+  const author = info?.lastCommit?.author ?? "-";
+  const date = formatVcsDate(info?.lastCommit?.date);
+  const message = info?.lastCommit?.message ?? "";
+  const status = info?.status;
+
   return (
     <button
       type="button"
       onClick={() => { void openVcsLog(path); }}
-      className="max-w-[26vw] truncate rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-left text-[11px] text-gray-600 hover:bg-blue-50"
+      className="flex min-w-0 flex-1 items-center gap-1.5 rounded border border-gray-200 bg-white px-2 py-0.5 text-left text-[11px] font-normal text-gray-600 hover:bg-blue-50"
       title={`${path}\n${formatVcsSummary(info)}`}
     >
-      <span className="font-semibold">{label}</span> {readOnly ? "只读 · " : ""}{formatVcsSummary(info)}
+      <span className="shrink-0 font-semibold">{label}</span>
+      {!info ? (
+        <span className="truncate text-gray-500">版本信息读取中</span>
+      ) : info.kind === "none" ? (
+        <span className="truncate text-gray-500">未检测到版本库</span>
+      ) : (
+        <>
+          <span className="shrink-0 font-mono text-gray-500">{info.kind.toUpperCase()}{source ? ` ${source}` : ""}</span>
+          {status && <span className="shrink-0 rounded bg-gray-100 px-1 font-mono text-gray-600">{status}</span>}
+          {readOnly && <span className="shrink-0 rounded bg-amber-50 px-1 text-amber-700">只读</span>}
+          <span className="shrink-0 rounded bg-blue-50 px-1.5 font-semibold text-blue-700">{author}</span>
+          <span className="shrink-0 rounded bg-emerald-50 px-1.5 font-semibold text-emerald-700">{date}</span>
+          {message && <span className="min-w-0 truncate text-gray-600">{message}</span>}
+        </>
+      )}
     </button>
   );
 }
@@ -136,7 +170,6 @@ export default function DiffView() {
   const canUndo = useEditStore((s) => s.undoStack.length > 0);
   const canRedo = useEditStore((s) => s.redoStack.length > 0);
 
-  const [showLegend, setShowLegend] = useState(true);
   const [showSearch, setShowSearch] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
@@ -161,6 +194,7 @@ export default function DiffView() {
   const [rightDirty, setRightDirty] = useState(false);
   const [leftVcsInfo, setLeftVcsInfo] = useState<VcsFileInfo | null>(null);
   const [rightVcsInfo, setRightVcsInfo] = useState<VcsFileInfo | null>(null);
+  const [showVersionCompare, setShowVersionCompare] = useState(false);
   const hasLocalUnsavedChanges = leftDirty || rightDirty;
 
   // Calculate search matches
@@ -1245,8 +1279,6 @@ export default function DiffView() {
           <BackIcon size={14} /> 文件夹
         </button>
         <span className="font-mono font-semibold mr-4">{selectedFilePair.filename}</span>
-        <VcsSummaryBadge label="左" path={selectedFilePair.oldPath} info={leftVcsInfo} readOnly={selectedFilePair.oldReadOnly} />
-        <VcsSummaryBadge label="右" path={selectedFilePair.newPath} info={rightVcsInfo} readOnly={selectedFilePair.newReadOnly} />
         {selectedFilePair.compareNote && (
           <span className="max-w-[22vw] truncate text-[11px] text-amber-700" title={selectedFilePair.compareNote}>
             {selectedFilePair.compareNote}
@@ -1291,15 +1323,6 @@ export default function DiffView() {
             <ChevronDownIcon size={12} />
             下一个
           </button>
-          <span className="text-gray-300 mx-1">|</span>
-          <button onClick={() => setShowLegend(!showLegend)}
-            className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-gray-100">
-            <span className={`transform transition-transform ${showLegend ? "rotate-90" : ""}`}>
-              <ChevronDownIcon size={12} />
-            </span>
-            图例
-          </button>
-          <span className="text-gray-300 mx-1">|</span>
           <button onClick={() => setFilter((f) => f === "diff" ? "all" : "diff")}
             className={`flex items-center gap-1 px-2 py-0.5 rounded ${filter === "diff" ? "bg-yellow-100 text-yellow-800" : "hover:bg-gray-100"}`}>
             <FilterIcon size={13} /> 仅差异 ({diffCount})
@@ -1387,35 +1410,25 @@ export default function DiffView() {
         </div>
       )}
 
-      {/* Legend panel */}
-      {showLegend && (
-        <div className="flex items-center gap-5 px-4 py-1 bg-gray-50 border-b text-xs">
-          <div className="flex items-center gap-1.5">
-            <span className="w-4 h-4 rounded bg-red-50" />
-            <span className="text-gray-600">差异行</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-4 h-4 rounded bg-red-200" />
-            <span className="text-gray-600">差异单元格</span>
-          </div>
-        </div>
-      )}
-
       {/* Header labels */}
       <div className="flex border-b text-xs">
-        <div className="flex-1 bg-gray-50 px-3 py-1 border-r font-semibold text-gray-600">
-          ← 左侧 {leftSelected.length > 0 && <span className="text-blue-600 ml-2">已选 {leftSelected.length} 行</span>}
+        <div className="flex min-w-0 flex-1 items-center gap-2 bg-gray-50 px-3 py-1 border-r font-semibold text-gray-600">
+          <span className="shrink-0">← 左侧</span>
+          {leftSelected.length > 0 && <span className="shrink-0 text-blue-600">已选 {leftSelected.length} 行</span>}
+          <VcsSummaryBadge label="左" path={selectedFilePair.oldPath} info={leftVcsInfo} readOnly={selectedFilePair.oldReadOnly} />
         </div>
-        <div className="w-16 bg-gray-100 px-1 py-1 text-center font-semibold text-gray-500 border-r">
+        <div className={`${ACTION_COLUMN_CLASS} flex items-center justify-center bg-gray-100 px-1 py-1 text-center font-semibold text-gray-500 border-r`}>
           操作
         </div>
-        <div className="flex-1 bg-gray-50 px-3 py-1 font-semibold text-gray-600">
-          右侧 {rightSelected.length > 0 && <span className="text-blue-600 ml-2">已选 {rightSelected.length} 行</span>}
+        <div className="flex min-w-0 flex-1 items-center gap-2 bg-gray-50 px-3 py-1 font-semibold text-gray-600">
+          <span className="shrink-0">右侧</span>
+          {rightSelected.length > 0 && <span className="shrink-0 text-blue-600">已选 {rightSelected.length} 行</span>}
+          <VcsSummaryBadge label="右" path={selectedFilePair.newPath} info={rightVcsInfo} readOnly={selectedFilePair.newReadOnly} />
         </div>
       </div>
 
       {/* Grids */}
-      <div className="flex-1 flex overflow-hidden relative pr-6">
+      <div className="flex-1 flex overflow-hidden relative">
         <div className="flex-1 border-r">
           <DiffGrid ref={oldGridRef} side="old" diffResult={diffResult} columns={oldSheet?.columns ?? []}
             onCellEdit={selectedFilePair.oldReadOnly ? undefined : handleLeftCellEdit} onSelectionChanged={setLeftSelected} filter={filter}
@@ -1427,20 +1440,29 @@ export default function DiffView() {
         </div>
 
         {/* Center action bar — BC style */}
-        <div className="w-16 flex flex-col items-center justify-center bg-gray-50 border-r gap-1.5 py-2">
-          <button onClick={() => handleCopyLeftToRight(leftToRightRefs)} disabled={leftToRightRefs.length === 0}
-            className="flex items-center gap-0.5 text-[10px] px-1.5 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-30"
-            title="Ctrl+→">
-            <ArrowRight size={11} /> 复制
+        <div className={`${ACTION_COLUMN_CLASS} flex flex-col items-center bg-gray-50 border-r gap-1.5 py-2`}>
+          <button
+            type="button"
+            onClick={() => setShowVersionCompare(true)}
+            className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
+          >
+            版本对比
           </button>
-          <span className="text-[10px] text-gray-400">{leftToRightRefs.length || 0} 行</span>
-          <div className="w-10 border-t" />
-          <button onClick={() => handleCopyRightToLeft(rightToLeftRefs)} disabled={rightToLeftRefs.length === 0}
-            className="flex items-center gap-0.5 text-[10px] px-1.5 py-1 bg-purple-500 text-white rounded hover:bg-purple-600 disabled:opacity-30"
-            title="Ctrl+←">
-            <ArrowLeft size={11} /> 复制
-          </button>
-          <span className="text-[10px] text-gray-400">{rightToLeftRefs.length || 0} 行</span>
+          <div className="flex flex-1 flex-col items-center justify-center gap-1.5">
+            <button onClick={() => handleCopyLeftToRight(leftToRightRefs)} disabled={leftToRightRefs.length === 0}
+              className="flex items-center gap-0.5 text-[10px] px-1.5 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-30"
+              title="Ctrl+→">
+              <ArrowRight size={11} /> 复制
+            </button>
+            <span className="text-[10px] text-gray-400">{leftToRightRefs.length || 0} 行</span>
+            <div className="w-10 border-t" />
+            <button onClick={() => handleCopyRightToLeft(rightToLeftRefs)} disabled={rightToLeftRefs.length === 0}
+              className="flex items-center gap-0.5 text-[10px] px-1.5 py-1 bg-purple-500 text-white rounded hover:bg-purple-600 disabled:opacity-30"
+              title="Ctrl+←">
+              <ArrowLeft size={11} /> 复制
+            </button>
+            <span className="text-[10px] text-gray-400">{rightToLeftRefs.length || 0} 行</span>
+          </div>
         </div>
 
         <div className="flex-1">
@@ -1627,6 +1649,13 @@ export default function DiffView() {
           title={error.title}
           message={error.message}
           onClose={() => setError(null)}
+        />
+      )}
+      {showVersionCompare && (
+        <VersionCompareDialog
+          leftPath={selectedFilePair.oldPath}
+          rightPath={selectedFilePair.newPath}
+          onClose={() => setShowVersionCompare(false)}
         />
       )}
     </div>

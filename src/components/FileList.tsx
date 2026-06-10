@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useDiffStore } from "../stores/diffStore";
-import { readExcel, detectKeyColumns, copyExcelFile, listExcelFiles, openVcsLog, openInFileExplorer, getVcsFileInfo, getVcsFileLog, exportVcsFileRevision, cleanupOldVcsTempExports } from "../api/tauri";
+import { readExcel, detectKeyColumns, copyExcelFile, listExcelFiles, openVcsLog, openInFileExplorer, exportVcsFileRevision, cleanupOldVcsTempExports } from "../api/tauri";
 import { computeDiff } from "../utils/diffEngine";
 import type { FilePair } from "../types/excel";
-import type { VcsCommitSummary, VcsFileInfo } from "../types/vcs";
-import VcsLogDialog from "./VcsLogDialog";
 import { RefreshIcon, ArrowRight, ArrowLeft, SpinnerIcon, FolderIcon, ChevronDown } from "./Icons";
 
 function formatSize(bytes: number): string {
@@ -181,10 +179,6 @@ function ContextMenu({ state, onAction, onClose }: {
       <div className="px-3 py-1.5 text-[11px] text-gray-400 border-b">
         {isFile ? `已选 ${count} 个文件` : "文件夹"} · {isLeft ? "左侧" : "右侧"}
       </div>
-      <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
-        onClick={() => onAction("show-vcs-log")}>
-        查看版本记录
-      </button>
       <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
         onClick={() => onAction("open-vcs-log")}>
         用 Tortoise 打开日志
@@ -368,14 +362,6 @@ export default function FileList() {
   const [filenameFilter, setFilenameFilter] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [vcsDialog, setVcsDialog] = useState<{
-    title: string;
-    path: string;
-    info: VcsFileInfo | null;
-    logs: VcsCommitSummary[];
-    loading: boolean;
-    error?: string;
-  } | null>(null);
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const syncingScrollRef = useRef(false);
@@ -601,35 +587,6 @@ export default function FileList() {
     if (!contextMenu) return;
     const paths = contextMenu.paths;
     setContextMenu(null);
-
-    if (action === "show-vcs-log") {
-      const targetPath = contextMenu.targetPath;
-      setVcsDialog({
-        title: contextMenu.targetKind === "folder" ? "目录版本记录" : "文件版本记录",
-        path: targetPath,
-        info: null,
-        logs: [],
-        loading: true,
-      });
-      try {
-        const info = await getVcsFileInfo(targetPath);
-        const logs = info.kind === "none" ? [] : await getVcsFileLog(targetPath, 20);
-        setVcsDialog({
-          title: contextMenu.targetKind === "folder" ? "目录版本记录" : "文件版本记录",
-          path: targetPath,
-          info,
-          logs,
-          loading: false,
-        });
-      } catch (e: any) {
-        setVcsDialog((state) => state ? {
-          ...state,
-          loading: false,
-          error: e?.message || String(e),
-        } : null);
-      }
-      return;
-    }
 
     if (action === "open-vcs-log") {
       try {
@@ -906,17 +863,6 @@ export default function FileList() {
       {contextMenu && (
         <ContextMenu state={contextMenu} onAction={handleContextAction}
           onClose={() => setContextMenu(null)} />
-      )}
-      {vcsDialog && (
-        <VcsLogDialog
-          title={vcsDialog.title}
-          info={vcsDialog.info}
-          logs={vcsDialog.logs}
-          loading={vcsDialog.loading}
-          error={vcsDialog.error}
-          onClose={() => setVcsDialog(null)}
-          onOpenExternal={() => { void openVcsLog(vcsDialog.path); }}
-        />
       )}
     </div>
   );

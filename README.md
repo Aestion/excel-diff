@@ -17,6 +17,7 @@
 
 ### 文件列表
 - **文件夹对齐** — 仅一侧存在的文件显示为灰色占位行，保持行对齐
+- **版本控制集成** — 支持查看文件 Git/SVN 日志，辅助定位版本差异
 - **同步滚动** — 左右面板滚动位置自动同步
 - **状态持久化** — 文件夹折叠状态、滚动位置在返回时保留
 - **对比结果保留** — 从对比视图返回后，已对比的结果不会丢失
@@ -60,8 +61,8 @@
 
 从 [Releases](https://github.com/Aestion/excel-diff/releases) 下载最新版本：
 
-- `Excel Diff_1.0.0_x64-setup.exe` — NSIS 安装包（推荐）
-- `Excel Diff_1.0.0_x64_en-US.msi` — MSI 安装包
+- `Excel Diff_1.0.1_x64-setup.exe` — NSIS 安装包（推荐）
+- `Excel Diff_1.0.1_x64_en-US.msi` — MSI 安装包
 
 ### 从源码构建
 
@@ -100,6 +101,14 @@ npm run tauri build
 构建完成后，可执行文件位于：
 - `src-tauri/target/release/excel-diff.exe`
 - 安装包位于 `src-tauri/target/release/bundle/`
+
+## 更新日志
+
+### v1.0.1
+
+- 新增 Git/SVN 版本日志查看能力，支持在对比文件时快速追踪版本变更。
+- 优化差异视图与文件列表交互，改进变更查看体验。
+- 改进文本规范化与重复键处理，减少换行符差异和重复关键列导致的误判。
 
 ## 使用方法
 
@@ -271,8 +280,8 @@ npm run tauri build
 
 构建成功后会生成：
 
-- NSIS：`src-tauri/target/release/bundle/nsis/Excel Diff_1.0.0_x64-setup.exe`
-- MSI：`src-tauri/target/release/bundle/msi/Excel Diff_1.0.0_x64_en-US.msi`
+- NSIS：`src-tauri/target/release/bundle/nsis/Excel Diff_1.0.1_x64-setup.exe`
+- MSI：`src-tauri/target/release/bundle/msi/Excel Diff_1.0.1_x64_en-US.msi`
 
 如果在 Git Bash/VSCode 终端里构建时误用了 `C:\Program Files\Git\usr\bin\link.exe`，请在 Visual Studio Developer Command Prompt 中构建，或确保 MSVC 的 `link.exe` 位于 PATH 前面。
 

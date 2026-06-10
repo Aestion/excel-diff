@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use encoding_rs::GBK;
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VcsCommitSummary {
@@ -45,14 +47,24 @@ fn command_text(mut command: Command) -> Result<String, String> {
         .output()
         .map_err(|e| format!("执行版本控制命令失败: {}", e))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = decode_command_text(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
             "版本控制命令执行失败".to_string()
         } else {
             stderr
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(decode_command_text(&output.stdout).trim().to_string())
+}
+
+fn decode_command_text(bytes: &[u8]) -> String {
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(text) => text,
+        Err(_) => {
+            let (text, _, _) = GBK.decode(bytes);
+            text.into_owned()
+        }
+    }
 }
 
 fn git_command(root: &Path) -> Command {
@@ -436,7 +448,7 @@ pub fn export_vcs_file_revision(path: &str, revision: &str) -> Result<String, St
                 .output()
                 .map_err(|e| format!("导出 Git 历史版本失败: {}", e))?;
             if !output.status.success() {
-                return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+                return Err(decode_command_text(&output.stderr).trim().to_string());
             }
             output.stdout
         }
@@ -447,7 +459,7 @@ pub fn export_vcs_file_revision(path: &str, revision: &str) -> Result<String, St
                 .output()
                 .map_err(|e| format!("导出 SVN 历史版本失败: {}", e))?;
             if !output.status.success() {
-                return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+                return Err(decode_command_text(&output.stderr).trim().to_string());
             }
             output.stdout
         }

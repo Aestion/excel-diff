@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { VcsCommitSummary, VcsFileInfo } from "../types/vcs";
 
 interface VcsLogDialogProps {
@@ -21,6 +22,10 @@ function shortId(id: string): string {
   return id.length > 12 ? id.slice(0, 12) : id;
 }
 
+function isLongMessage(message: string): boolean {
+  return message.length > 120 || message.includes("\n");
+}
+
 export default function VcsLogDialog({
   title,
   info,
@@ -30,6 +35,20 @@ export default function VcsLogDialog({
   onClose,
   onOpenExternal,
 }: VcsLogDialogProps) {
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(() => new Set());
+
+  const toggleExpanded = (key: string) => {
+    setExpandedItems((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
       <div className="flex max-h-[78vh] w-[720px] max-w-[calc(100vw-32px)] flex-col rounded border bg-white shadow-xl">
@@ -65,16 +84,42 @@ export default function VcsLogDialog({
                 <div className="p-6 text-sm text-gray-400">暂无日志</div>
               ) : (
                 <div className="divide-y">
-                  {logs.map((item) => (
-                    <div key={`${item.id}-${item.date ?? ""}`} className="px-4 py-2 text-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs text-blue-700">{shortId(item.id)}</span>
-                        <span className="text-xs text-gray-500">{item.author ?? "-"}</span>
-                        <span className="text-xs text-gray-400">{formatDate(item.date)}</span>
+                  {logs.map((item) => {
+                    const key = `${item.id}-${item.date ?? ""}`;
+                    const message = item.message || "(无提交说明)";
+                    const canExpand = isLongMessage(message);
+                    const expanded = expandedItems.has(key);
+
+                    return (
+                      <div key={key} className="px-4 py-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs text-blue-700">{shortId(item.id)}</span>
+                          <span className="text-xs text-gray-500">{item.author ?? "-"}</span>
+                          <span className="text-xs text-gray-400">{formatDate(item.date)}</span>
+                        </div>
+                        <div
+                          className="mt-1 whitespace-pre-wrap break-words text-gray-800"
+                          style={expanded ? undefined : {
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {message}
+                        </div>
+                        {canExpand && (
+                          <button
+                            type="button"
+                            className="mt-1 text-xs text-blue-600 hover:text-blue-800"
+                            onClick={() => toggleExpanded(key)}
+                          >
+                            {expanded ? "收起" : "展开"}
+                          </button>
+                        )}
                       </div>
-                      <div className="mt-1 text-gray-800">{item.message || "(无提交说明)"}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
