@@ -1,3 +1,5 @@
+import type { VcsFileInfo } from "./vcs";
+
 export type CellValue = string | number | boolean | null;
 
 export interface CellData {
@@ -49,5 +51,7 @@ export interface FilePair {
   diffStatus: DiffStatus;
   oldReadOnly?: boolean;
   newReadOnly?: boolean;
+  oldVcsInfo?: VcsFileInfo;
+  newVcsInfo?: VcsFileInfo;
   compareNote?: string;
 }

@@ -15,6 +15,14 @@
 - **单元格编辑** — 直接在对比界面修改数据，支持撤销/重做
 - **导出报告** — 导出差异报告为 CSV 文件
 
+### 多页式工作区（v1.0.3）
+- **多标签页** — 目录对比页和文件对比页作为独立标签页存在，可自由切换
+- **智能附着** — 文件对比页自动插入到来源目录页签后面，方便管理
+- **单独关闭** — 每个页签可单独关闭，关闭对比页不影响其他页签
+- **未保存提示** — 关闭含未保存修改的对比页签时会弹窗确认
+- **右键菜单** — 支持关闭当前、关闭其他、关闭同组页签
+- **状态快照** — 切换对比页签时自动保存/恢复当前对比视图状态
+
 ### 文件列表
 - **文件夹对齐** — 仅一侧存在的文件显示为灰色占位行，保持行对齐
 - **版本控制集成** — 支持查看文件 Git/SVN 日志，辅助定位版本差异
@@ -36,6 +44,10 @@
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
 │  │ FileList │  │ DiffView │  │ DiffGrid │  │  Store  │ │
 │  └──────────┘  └──────────┘  └──────────┘  └─────────┘ │
+│  ┌──────────┐  ┌──────────┐                             │
+│  │Workspace │  │ History  │                             │
+│  │  Tabs    │  │ Version  │                             │
+│  └──────────┘  └──────────┘                             │
 └─────────────────────────────────────────────────────────┘
                            │
                     Tauri IPC 调用
@@ -61,8 +73,8 @@
 
 从 [Releases](https://github.com/Aestion/excel-diff/releases) 下载最新版本：
 
-- `Excel Diff_1.0.1_x64-setup.exe` — NSIS 安装包（推荐）
-- `Excel Diff_1.0.1_x64_en-US.msi` — MSI 安装包
+- `Excel Diff_1.0.3_x64-setup.exe` — NSIS 安装包（推荐）
+- `Excel Diff_1.0.3_x64_en-US.msi` — MSI 安装包
 
 ### 从源码构建
 
@@ -99,10 +111,17 @@ npm run tauri build
 ```
 
 构建完成后，可执行文件位于：
-- `src-tauri/target/release/excel-diff.exe`
+- `src-tauri/target/release/ExcelDiff.exe`
 - 安装包位于 `src-tauri/target/release/bundle/`
 
 ## 更新日志
+
+### v1.0.3
+
+- **多页式工作区** — 目录对比和文件对比改为独立标签页，支持多标签并行查看和单独关闭。
+- 新增工作区页签栏，支持右键菜单关闭/关闭其他/关闭同组。
+- 切换对比页签时自动保存和恢复对比视图状态。
+- 关闭含未保存修改的页签时增加确认提示。
 
 ### v1.0.1
 
@@ -121,7 +140,8 @@ npm run tauri build
    - ⚪ 灰色背景：仅一侧存在的文件
 3. **点击对比** — 点击蓝色"对比"按钮，详细对比所有文件内容
 4. **查看差异** — 双击文件进入对比视图，查看具体差异
-5. **合并文件** — 右键选择文件，批量复制到另一侧
+5. **多标签切换** — 可同时打开多个文件对比页签，在顶部标签栏自由切换
+6. **合并文件** — 右键选择文件，批量复制到另一侧
 
 ### 对比视图操作
 
@@ -129,6 +149,7 @@ npm run tauri build
 - **复制行** — 选中行后，点击中间的"复制"按钮或使用 Ctrl+→/Ctrl+←
 - **编辑单元格** — 双击右侧单元格可直接编辑
 - **保存** — 修改后点击"保存左侧"或"保存右侧"
+- **关闭页签** — 点击页签上的 × 关闭当前对比，不影响其他页签
 
 ## 快捷键
 
@@ -163,16 +184,21 @@ excel-diff/
 │   │   ├── FileList.tsx          # 文件列表（双栏对比）
 │   │   ├── DiffView.tsx          # 差异对比视图
 │   │   ├── DiffGrid.tsx          # 差异网格组件
+│   │   ├── WorkspaceTabs.tsx     # 工作区页签栏
+│   │   ├── HistoryVersionDialog.tsx # 历史版本对比弹窗
 │   │   ├── KeyColumnSelector.tsx # 关键列选择器
 │   │   ├── DirectoryPicker.tsx   # 目录选择器
 │   │   ├── HistoryBar.tsx        # 历史记录栏
 │   │   └── Icons.tsx             # 图标组件
 │   ├── stores/                   # Zustand 状态管理
 │   │   ├── diffStore.ts          # 核心状态（文件、对比、缓存）
+│   │   ├── workspaceStore.ts     # 工作区页签状态
 │   │   ├── editStore.ts          # 编辑状态（撤销/重做）
 │   │   └── historyStore.ts       # 历史记录
 │   ├── utils/
-│   │   └── diffEngine.ts         # 差异对比算法
+│   │   ├── diffEngine.ts         # 差异对比算法
+│   │   ├── diffTabSnapshot.ts    # 对比页签状态快照
+│   │   └── diffTabUiStateBridge.ts # 对比页签 UI 状态桥接
 │   ├── types/                    # TypeScript 类型定义
 │   └── api/
 │       └── tauri.ts              # Tauri IPC 接口
@@ -182,6 +208,7 @@ excel-diff/
 │   │   │   ├── reader.rs         # Excel 读取（calamine）
 │   │   │   └── writer.rs         # Excel 写入（Python）
 │   │   ├── commands/mod.rs       # Tauri 命令
+│   │   ├── vcs/mod.rs            # 版本控制集成
 │   │   └── models/types.rs       # 数据模型
 │   ├── read_excel.py             # Python Excel 读取（备用）
 │   ├── write_excel.py            # Python Excel 写入
@@ -280,8 +307,8 @@ npm run tauri build
 
 构建成功后会生成：
 
-- NSIS：`src-tauri/target/release/bundle/nsis/Excel Diff_1.0.1_x64-setup.exe`
-- MSI：`src-tauri/target/release/bundle/msi/Excel Diff_1.0.1_x64_en-US.msi`
+- NSIS：`src-tauri/target/release/bundle/nsis/Excel Diff_1.0.3_x64-setup.exe`
+- MSI：`src-tauri/target/release/bundle/msi/Excel Diff_1.0.3_x64_en-US.msi`
 
 如果在 Git Bash/VSCode 终端里构建时误用了 `C:\Program Files\Git\usr\bin\link.exe`，请在 Visual Studio Developer Command Prompt 中构建，或确保 MSVC 的 `link.exe` 位于 PATH 前面。
 

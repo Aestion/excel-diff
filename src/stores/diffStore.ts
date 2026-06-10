@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CellValue, FileEntry, FilePair, ParsedWorkbook, Row } from "../types/excel";
+import type { CellValue, DiffStatus, FileEntry, FilePair, ParsedWorkbook, Row } from "../types/excel";
 import type { DiffResult } from "../types/diff";
 import { workbooksEqual } from "../utils/workbookCompare";
 
@@ -48,6 +48,7 @@ interface DiffState {
   setFileListScrollTop: (scrollTop: number) => void;
   setEffectiveNewRows: (rows: Row[] | null) => void;
   updateNewCell: (rowIndex: number, colIndex: number, value: CellValue) => void;
+  markFileStatus: (relativePath: string, diffStatus: DiffStatus) => void;
   markFileAsIdentical: (relativePath: string) => void;
 }
 
@@ -312,13 +313,17 @@ export const useDiffStore = create<DiffState>((set, get) => ({
     set({ effectiveNewRows: newRows, hasUnsavedChanges: true });
   },
 
-  markFileAsIdentical: (relativePath) => {
+  markFileStatus: (relativePath, diffStatus) => {
     set((state) => ({
       filePairs: state.filePairs.map((p) =>
         p.relativePath === relativePath
-          ? { ...p, diffStatus: "identical" as const }
+          ? { ...p, diffStatus }
           : p
       ),
     }));
+  },
+
+  markFileAsIdentical: (relativePath) => {
+    get().markFileStatus(relativePath, "identical");
   },
 }));

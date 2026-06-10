@@ -63,10 +63,3 @@
 .ag-theme-alpine .ag-header-select-all {
   margin: 0;
 }
-
-/* DiffView single-scroll-source mode: follower grid scrollbars are driven by the master grid. */
-.diff-grid-follower .ag-body-vertical-scroll,
-.diff-grid-follower .ag-body-horizontal-scroll {
-  visibility: hidden;
-  pointer-events: none;
-}

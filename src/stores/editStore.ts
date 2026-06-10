@@ -26,6 +26,7 @@ interface EditState {
   redo: () => EditOperation | null;
   canUndo: () => boolean;
   canRedo: () => boolean;
+  setStacks: (undoStack: EditOperation[], redoStack: EditOperation[]) => void;
   clear: () => void;
 }
 
@@ -64,5 +65,6 @@ export const useEditStore = create<EditState>((set, get) => ({
   canUndo: () => get().undoStack.length > 0,
   canRedo: () => get().redoStack.length > 0,
 
+  setStacks: (undoStack, redoStack) => set({ undoStack, redoStack }),
   clear: () => set({ undoStack: [], redoStack: [] }),
 }));

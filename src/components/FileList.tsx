@@ -5,6 +5,10 @@ import { computeDiff } from "../utils/diffEngine";
 import type { FilePair } from "../types/excel";
 import { RefreshIcon, ArrowRight, ArrowLeft, SpinnerIcon, FolderIcon, ChevronDown } from "./Icons";
 import VersionCompareDialog from "./VersionCompareDialog";
+import HistoryVersionDialog from "./HistoryVersionDialog";
+import type { VcsCommitSummary, VcsFileInfo } from "../types/vcs";
+import { useWorkspaceStore } from "../stores/workspaceStore";
+import { captureDiffTabSnapshot } from "../utils/diffTabSnapshot";
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return "";
@@ -161,6 +165,11 @@ interface ContextMenuState {
 interface VersionCompareTarget {
   leftPath: string | null;
   rightPath: string | null;
+}
+
+interface HistoryCompareTarget {
+  pair: FilePair;
+  currentPath: string;
 }
 
 function getContextMenuPosition(x: number, y: number, kind: "file" | "folder") {
@@ -377,16 +386,20 @@ export default function FileList() {
     setFileListCollapsedFolders, setFileListKnownFolders,
     fileListScrollTop, setFileListScrollTop,
     verifyAllFiles,
+    markFileStatus,
   } = useDiffStore();
+  const { openDiffTab, activeFileListTabId } = useWorkspaceStore();
 
   const [merging, setMerging] = useState(false);
   const [mergeProgress, setMergeProgress] = useState("");
+  const [openingDiff, setOpeningDiff] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("all");
   const [filenameFilter, setFilenameFilter] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [versionCompareTarget, setVersionCompareTarget] = useState<VersionCompareTarget | null>(null);
+  const [historyCompareTarget, setHistoryCompareTarget] = useState<HistoryCompareTarget | null>(null);
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const syncingScrollRef = useRef(false);
@@ -483,14 +496,25 @@ export default function FileList() {
 
   // Open file for diff
   const handleOpen = useCallback(async (pair: FilePair) => {
+    setOpeningDiff(pair.filename);
     try {
       if (pair.status === "old-only" || pair.status === "new-only") {
         if (pair.oldPath) setOldWorkbook(await readExcel(pair.oldPath));
         if (pair.newPath) setNewWorkbook(await readExcel(pair.newPath));
-        selectFilePair(pair); setView("diff"); return;
+        selectFilePair(pair);
+        openDiffTab({
+          parentTabId: activeFileListTabId,
+          title: pair.filename,
+          fileKey: pair.relativePath,
+          snapshot: captureDiffTabSnapshot(),
+        });
+        setView("diff");
+        return;
       }
       const [oldWb, newWb] = await Promise.all([readExcel(pair.oldPath!), readExcel(pair.newPath!)]);
-      setOldWorkbook(oldWb); setNewWorkbook(newWb); selectFilePair(pair);
+      setOldWorkbook(oldWb);
+      setNewWorkbook(newWb);
+      selectFilePair(pair);
       const commonSheets = oldWb.sheetNames.filter(s => newWb.sheetNames.includes(s));
       const sheetName = commonSheets[0] || oldWb.sheetNames[0] || "";
       setCurrentSheet(sheetName);
@@ -499,13 +523,26 @@ export default function FileList() {
         setKeyColumnIndices(keyCols);
         const os = oldWb.sheets.find(s => s.name === sheetName);
         const ns = newWb.sheets.find(s => s.name === sheetName);
-        if (os && ns) setDiffResult(computeDiff(os, ns, keyCols));
+        if (os && ns) {
+          const result = computeDiff(os, ns, keyCols);
+          setDiffResult(result);
+          const hasDiff = result.stats.added > 0 || result.stats.deleted > 0 || result.stats.modified > 0;
+          markFileStatus(pair.relativePath, hasDiff ? "different" : "identical");
+        }
       }
+      openDiffTab({
+        parentTabId: activeFileListTabId,
+        title: pair.filename,
+        fileKey: pair.relativePath,
+        snapshot: captureDiffTabSnapshot(),
+      });
       setView("diff");
     } catch (e: any) {
-      alert(`打开失败: ${e?.message || String(e)}`);
+      alert(`Open failed: ${e?.message || String(e)}`);
+    } finally {
+      setOpeningDiff("");
     }
-  }, [setView, selectFilePair, setOldWorkbook, setNewWorkbook, setCurrentSheet, setDiffResult, setKeyColumnIndices]);
+  }, [activeFileListTabId, markFileStatus, openDiffTab, setView, selectFilePair, setOldWorkbook, setNewWorkbook, setCurrentSheet, setDiffResult, setKeyColumnIndices]);
 
   // Selection
   const handleSelect = useCallback((path: string, e: React.MouseEvent) => {
@@ -608,6 +645,85 @@ export default function FileList() {
     setContextMenu({ x: position.x, y: position.y, side, targetKind: kind, targetPath, relativePath: path, paths });
   }, [resolveContextTarget, selectedPaths]);
 
+  const handleHistoryVersionSelect = useCallback(async (
+    revision: string,
+    commit?: VcsCommitSummary,
+    currentInfo?: VcsFileInfo | null
+  ) => {
+    if (!historyCompareTarget) return;
+    const trimmedRevision = revision.trim();
+    if (!trimmedRevision) return;
+
+    const { pair, currentPath } = historyCompareTarget;
+    setHistoryCompareTarget(null);
+
+    try {
+      await cleanupOldVcsTempExports(24);
+      const historyPath = await exportVcsFileRevision(currentPath, trimmedRevision);
+      const [historyWb, currentWb] = await Promise.all([
+        readExcel(historyPath),
+        readExcel(currentPath),
+      ]);
+      const commonSheets = historyWb.sheetNames.filter(s => currentWb.sheetNames.includes(s));
+      const sheetName = commonSheets[0] || historyWb.sheetNames[0] || currentWb.sheetNames[0] || "";
+      setOldWorkbook(historyWb);
+      setNewWorkbook(currentWb);
+      setCurrentSheet(sheetName);
+      selectFilePair({
+        ...pair,
+        oldPath: historyPath,
+        newPath: currentPath,
+        status: "matched",
+        diffStatus: "unknown",
+        filename: `${pair.filename} @ ${trimmedRevision}`,
+        oldReadOnly: true,
+        oldVcsInfo: {
+          kind: currentInfo?.kind ?? "svn",
+          path: currentPath,
+          root: currentInfo?.root,
+          branch: currentInfo?.branch,
+          url: currentInfo?.url,
+          revision: trimmedRevision,
+          status: "history",
+          lastCommit: commit ?? {
+            id: trimmedRevision,
+            message: "历史版本",
+          },
+        },
+        newVcsInfo: currentInfo ?? undefined,
+        compareNote: `Left side is read-only history revision ${trimmedRevision}`,
+      });
+      if (sheetName) {
+        const keyCols = await detectKeyColumns(currentPath, sheetName);
+        setKeyColumnIndices(keyCols);
+        const os = historyWb.sheets.find(s => s.name === sheetName);
+        const ns = currentWb.sheets.find(s => s.name === sheetName);
+        if (os && ns) setDiffResult(computeDiff(os, ns, keyCols));
+      }
+      openDiffTab({
+        parentTabId: activeFileListTabId,
+        title: `${pair.filename} @ ${trimmedRevision}`,
+        fileKey: pair.relativePath,
+        revision: trimmedRevision,
+        snapshot: captureDiffTabSnapshot(),
+      });
+      setView("diff");
+    } catch (e: any) {
+      alert(`历史版本比较失败: ${e?.message || String(e)}`);
+    }
+  }, [
+    historyCompareTarget,
+    setCurrentSheet,
+    setDiffResult,
+    setKeyColumnIndices,
+    setNewWorkbook,
+    setOldWorkbook,
+    setView,
+    selectFilePair,
+    activeFileListTabId,
+    openDiffTab,
+  ]);
+
   // Context menu action
   const handleContextAction = useCallback(async (action: string) => {
     if (!contextMenu) return;
@@ -637,42 +753,7 @@ export default function FileList() {
     if (action === "compare-history") {
       const pair = paths.length === 1 ? filePairs.find(p => p.relativePath === paths[0]) : null;
       if (!pair) return;
-      const currentPath = contextMenu.targetPath;
-      const revision = window.prompt("输入要比较的 commit/revision：");
-      if (!revision) return;
-      try {
-        await cleanupOldVcsTempExports(24);
-        const historyPath = await exportVcsFileRevision(currentPath, revision.trim());
-        const [historyWb, currentWb] = await Promise.all([
-          readExcel(historyPath),
-          readExcel(currentPath),
-        ]);
-        const commonSheets = historyWb.sheetNames.filter(s => currentWb.sheetNames.includes(s));
-        const sheetName = commonSheets[0] || historyWb.sheetNames[0] || currentWb.sheetNames[0] || "";
-        setOldWorkbook(historyWb);
-        setNewWorkbook(currentWb);
-        setCurrentSheet(sheetName);
-        selectFilePair({
-          ...pair,
-          oldPath: historyPath,
-          newPath: currentPath,
-          status: "matched",
-          diffStatus: "unknown",
-          filename: `${pair.filename} @ ${revision.trim()}`,
-          oldReadOnly: true,
-          compareNote: `左侧为历史版本 ${revision.trim()} 的临时只读文件`,
-        });
-        if (sheetName) {
-          const keyCols = await detectKeyColumns(currentPath, sheetName);
-          setKeyColumnIndices(keyCols);
-          const os = historyWb.sheets.find(s => s.name === sheetName);
-          const ns = currentWb.sheets.find(s => s.name === sheetName);
-          if (os && ns) setDiffResult(computeDiff(os, ns, keyCols));
-        }
-        setView("diff");
-      } catch (e: any) {
-        alert(`历史版本比较失败: ${e?.message || String(e)}`);
-      }
+      setHistoryCompareTarget({ pair, currentPath: contextMenu.targetPath });
       return;
     }
 
@@ -780,7 +861,7 @@ export default function FileList() {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="relative flex-1 flex flex-col overflow-hidden">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-1.5 bg-gray-50 border-b text-xs">
         <div className="flex items-center gap-1">
@@ -907,6 +988,24 @@ export default function FileList() {
           rightPath={versionCompareTarget.rightPath}
           onClose={() => setVersionCompareTarget(null)}
         />
+      )}
+      {historyCompareTarget && (
+        <HistoryVersionDialog
+          path={historyCompareTarget.currentPath}
+          onClose={() => setHistoryCompareTarget(null)}
+          onSelect={handleHistoryVersionSelect}
+        />
+      )}
+      {openingDiff && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-white/75">
+          <div className="flex min-w-[260px] items-center gap-3 rounded border bg-white px-4 py-3 text-sm shadow-lg">
+            <SpinnerIcon size={18} />
+            <div className="min-w-0">
+              <div className="font-semibold text-gray-800">Opening diff...</div>
+              <div className="truncate text-xs text-gray-500" title={openingDiff}>{openingDiff}</div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

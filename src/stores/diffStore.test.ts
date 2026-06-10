@@ -113,6 +113,15 @@ describe('diffStore', () => {
     expect(useDiffStore.getState().filePairs[0].diffStatus).toBe('identical');
   });
 
+  it('marks file with an explicit diff status', () => {
+    const store = useDiffStore.getState();
+    store.setFilePairs([
+      { filename: 'a.xlsx', relativePath: 'a.xlsx', oldPath: '/old/a.xlsx', newPath: '/new/a.xlsx', oldSize: 100, newSize: 100, status: 'matched', diffStatus: 'unknown' },
+    ]);
+    store.markFileStatus('a.xlsx', 'different');
+    expect(useDiffStore.getState().filePairs[0].diffStatus).toBe('different');
+  });
+
   it('updates new cell value', () => {
     const store = useDiffStore.getState();
     store.setEffectiveNewRows([

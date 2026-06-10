@@ -8,7 +8,7 @@ import type { DiffResult, DiffRow } from "../types/diff";
 
 const ROW_HEIGHT = 26;
 const VIRTUAL_ROW_BUFFER = 20;
-const SCROLL_SYNC_HOLD_MS = 240;
+const SCROLL_SYNC_HOLD_MS = 80;
 const ROW_NUMBER_COL_ID = "_rowNumber";
 
 function getDiffRowRef(row: DiffRow): string {
@@ -24,25 +24,22 @@ interface DiffGridProps {
   filter?: "all" | "diff" | "same" | "duplicate";
   onScroll?: (scrollTop: number, scrollLeft: number, rowIndex: number, source: "old" | "new") => void;
   onScrollMetrics?: (metrics: { scrollTop: number; clientHeight: number; scrollHeight: number }) => void;
-  isScrollFollower?: boolean;
-  onFollowerWheel?: (deltaY: number, deltaX: number) => void;
   columnWidths?: Record<string, number>;
   onColumnWidthsChange?: (widths: Record<string, number>) => void;
   searchText?: string;
   searchMatches?: { rowRef: string; side: "old" | "new"; colIndex: number; value: string }[];
   currentMatchIndex?: number;
-  scrollToRowRef?: string | null;
-  scrollToSignal?: number;
+  activeRowRef?: string | null;
   onRowContextMenu?: (side: "old" | "new", rowRef: string, x: number, y: number) => void;
 }
 
 export type DiffGridHandle = {
   syncScroll: (scrollTop: number, scrollLeft: number) => void;
-  scrollBy: (deltaY: number, deltaX: number) => void;
-  getScrollPosition: () => { top: number; left: number } | null;
+  scrollToRowRef: (rowRef: string) => void;
+  getScrollPosition: () => { top: number; left: number; rowIndex: number } | null;
 };
 
-const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ side, diffResult, columns, onCellEdit, onSelectionChanged, filter = "all", onScroll, onScrollMetrics, isScrollFollower = false, onFollowerWheel, columnWidths, onColumnWidthsChange, searchText, searchMatches, currentMatchIndex, scrollToRowRef, scrollToSignal, onRowContextMenu }, ref) {
+const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ side, diffResult, columns, onCellEdit, onSelectionChanged, filter = "all", onScroll, onScrollMetrics, columnWidths, onColumnWidthsChange, searchText, searchMatches, currentMatchIndex, activeRowRef, onRowContextMenu }, ref) {
   const gridRef = useRef<AgGridReact>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const syncingRef = useRef(false);
@@ -117,19 +114,6 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
     if (viewport) reportScrollMetrics(viewport);
   }, [getBodyViewport, getHorizontalViewport, holdScrollEvents, reportScrollMetrics]);
 
-  const scrollBy = useCallback((deltaY: number, deltaX: number) => {
-    const viewport = getBodyViewport();
-    const horizontalViewport = getHorizontalViewport();
-    if (viewport && deltaY !== 0) {
-      viewport.scrollTop += deltaY;
-    }
-    if (horizontalViewport && deltaX !== 0) {
-      horizontalViewport.scrollLeft += deltaX;
-    } else if (viewport && deltaX !== 0) {
-      viewport.scrollLeft += deltaX;
-    }
-  }, [getBodyViewport, getHorizontalViewport]);
-
   const getScrollPosition = useCallback(() => {
     const viewport = getBodyViewport();
     if (!viewport) return null;
@@ -137,22 +121,9 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
     return {
       top: viewport.scrollTop,
       left: horizontalViewport?.scrollLeft ?? viewport.scrollLeft,
+      rowIndex: readFirstDisplayedRowIndex(),
     };
-  }, [getBodyViewport, getHorizontalViewport]);
-
-  useImperativeHandle(ref, () => ({ syncScroll, scrollBy, getScrollPosition }), [getScrollPosition, scrollBy, syncScroll]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !isScrollFollower || !onFollowerWheel) return;
-
-    const handler = (event: WheelEvent) => {
-      event.preventDefault();
-      onFollowerWheel(event.deltaY, event.deltaX);
-    };
-    container.addEventListener("wheel", handler, { passive: false, capture: true });
-    return () => container.removeEventListener("wheel", handler, true);
-  }, [isScrollFollower, onFollowerWheel]);
+  }, [getBodyViewport, getHorizontalViewport, readFirstDisplayedRowIndex]);
 
   const columnDefs: ColDef[] = useMemo(() => {
     const maxRowNumber = diffResult.diffRows.reduce((max, row) => (
@@ -218,14 +189,25 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
 
   const getRowClass = useCallback((params: RowClassParams<any>) => {
     const duplicateClass = params.data?._hasDuplicateKey ? " row-duplicate-key" : "";
-    const activeClass = params.data?._rowRef === scrollToRowRef ? " row-active-diff" : "";
+    const activeClass = params.data?._rowRef === activeRowRef ? " row-active-diff" : "";
     switch (params.data?._status) {
       case "added":    return `row-added${duplicateClass}${activeClass}`;
       case "deleted":  return `row-deleted${duplicateClass}${activeClass}`;
       case "modified": return `row-modified${duplicateClass}${activeClass}`;
       default:         return `${duplicateClass}${activeClass}`.trim();
     }
-  }, [scrollToRowRef]);
+  }, [activeRowRef]);
+
+  const scrollToRowRef = useCallback((rowRef: string) => {
+    const api = gridRef.current?.api;
+    if (!api) return;
+    const rowIndex = rowData.findIndex((row) => row._rowRef === rowRef);
+    if (rowIndex < 0) return;
+    api.ensureIndexVisible(rowIndex, "middle");
+    api.redrawRows();
+  }, [rowData]);
+
+  useImperativeHandle(ref, () => ({ syncScroll, scrollToRowRef, getScrollPosition }), [getScrollPosition, scrollToRowRef, syncScroll]);
 
   const handleCellValueChanged = useCallback(
     (event: CellValueChangedEvent) => {
@@ -281,18 +263,6 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
     onRowContextMenu?.(side, rowRef, nativeEvent.clientX, nativeEvent.clientY);
   }, [onRowContextMenu, side]);
 
-  useEffect(() => {
-    if (!scrollToRowRef || !gridRef.current?.api) return;
-    const rowIndex = rowData.findIndex((row) => row._rowRef === scrollToRowRef);
-    if (rowIndex < 0) return;
-
-    const frame = window.requestAnimationFrame(() => {
-      gridRef.current?.api.ensureIndexVisible(rowIndex, "middle");
-      gridRef.current?.api.redrawRows();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [scrollToSignal]);
-
   // Listen to vertical and horizontal scroll events on the AG Grid viewports.
   useEffect(() => {
     if ((!onScroll && !onScrollMetrics) || !containerRef.current) return;
@@ -318,7 +288,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
   return (
     <div
       ref={containerRef}
-      className={`ag-theme-alpine h-full w-full ${isScrollFollower ? "diff-grid-follower" : ""}`}
+      className="ag-theme-alpine h-full w-full"
       onContextMenu={(event) => event.preventDefault()}
     >
       <AgGridReact

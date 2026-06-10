@@ -7,6 +7,9 @@ import DiffGrid, { type DiffGridHandle } from "./DiffGrid";
 import KeyColumnSelector from "./KeyColumnSelector";
 import ErrorDialog from "./ErrorDialog";
 import VersionCompareDialog from "./VersionCompareDialog";
+import { useWorkspaceStore } from "../stores/workspaceStore";
+import { onDiffTabUiStateCapture, onDiffTabUiStateRestore } from "../utils/diffTabUiStateBridge";
+import { captureDiffTabSnapshot } from "../utils/diffTabSnapshot";
 import { writeExcel, writeExcelChanges, listExcelFiles, readExcel, pickSavePath, saveTextFile, detectKeyColumns, getVcsFileInfo, openVcsLog } from "../api/tauri";
 import type { CellValue, Row, SheetData, CellData } from "../types/excel";
 import type { DiffResult, DiffRow } from "../types/diff";
@@ -197,6 +200,7 @@ export default function DiffView() {
     diffResult, keyColumnIndices, effectiveNewRows,
     setView, setCurrentSheet, setDiffResult, setKeyColumnIndices, setHasUnsavedChanges, setEffectiveNewRows, setOldWorkbook,
   } = useDiffStore();
+  const { tabs, activeTabId, activateFileListTab, updateDiffSnapshot } = useWorkspaceStore();
 
   const { pushEdit, undo, redo } = useEditStore();
   const canUndo = useEditStore((s) => s.undoStack.length > 0);
@@ -228,6 +232,14 @@ export default function DiffView() {
   const [rightVcsInfo, setRightVcsInfo] = useState<VcsFileInfo | null>(null);
   const [showVersionCompare, setShowVersionCompare] = useState(false);
   const hasLocalUnsavedChanges = leftDirty || rightDirty;
+
+  const saveActiveTabSnapshot = useCallback(() => {
+    const activeTab = useWorkspaceStore.getState().tabs.find((tab) => tab.id === useWorkspaceStore.getState().activeTabId);
+    if (activeTab?.type !== "diff") return;
+    window.setTimeout(() => {
+      updateDiffSnapshot(activeTab.id, captureDiffTabSnapshot());
+    }, 0);
+  }, [updateDiffSnapshot]);
 
   // Calculate search matches
   const searchMatches = useMemo(() => {
@@ -278,6 +290,9 @@ export default function DiffView() {
   const leftSelectedRef = useRef(leftSelected);
   const rightSelectedRef = useRef(rightSelected);
   const filterRef = useRef(filter);
+  const scrollMetricsRef = useRef(scrollMetrics);
+  const columnWidthsRef = useRef(columnWidths);
+  const isActiveDiffViewRef = useRef(true);
   const navigateDiffRef = useRef<(dir: "next" | "prev") => void>(() => {});
   const copyLeftToRightRef = useRef<(rowRefs: string[], mode?: CopyMode) => void>(() => {});
   const copyRightToLeftRef = useRef<(rowRefs: string[], mode?: CopyMode) => void>(() => {});
@@ -290,13 +305,50 @@ export default function DiffView() {
   const metricsTimerRef = useRef<number | null>(null);
   const pendingScrollMetricRef = useRef(0);
   const pendingScrollMetricsRef = useRef<{ scrollTop: number; clientHeight: number; scrollHeight: number } | null>(null);
-  const scrollSyncFrameRef = useRef<number | null>(null);
-  const pendingScrollSyncRef = useRef<{ top: number; left: number; source: "old" | "new" } | null>(null);
+  const restoredSnapshotRef = useRef(false);
   showSearchRef.current = showSearch;
   searchTextRef.current = searchText;
   leftSelectedRef.current = leftSelected;
   rightSelectedRef.current = rightSelected;
   filterRef.current = filter;
+  scrollMetricsRef.current = scrollMetrics;
+  columnWidthsRef.current = columnWidths;
+  isActiveDiffViewRef.current = tabs.find((tab) => tab.id === activeTabId)?.type === "diff";
+
+  useEffect(() => {
+    const offCapture = onDiffTabUiStateCapture(() => ({
+      showSearch: showSearchRef.current,
+      searchText: searchTextRef.current,
+      currentMatchIndex,
+      leftSelected: leftSelectedRef.current,
+      rightSelected: rightSelectedRef.current,
+      activeDiffRowRef,
+      filter: filterRef.current,
+      scrollMetrics: scrollMetricsRef.current,
+      columnWidths: columnWidthsRef.current,
+    }));
+    const offRestore = onDiffTabUiStateRestore((state) => {
+      restoredSnapshotRef.current = true;
+      if (metricsTimerRef.current !== null) {
+        window.clearTimeout(metricsTimerRef.current);
+        metricsTimerRef.current = null;
+      }
+      pendingScrollMetricsRef.current = null;
+      setShowSearch(state.showSearch);
+      setSearchText(state.searchText);
+      setCurrentMatchIndex(state.currentMatchIndex);
+      setLeftSelected(state.leftSelected);
+      setRightSelected(state.rightSelected);
+      setActiveDiffRowRef(null);
+      setFilter(state.filter);
+      setScrollMetrics(state.scrollMetrics);
+      setColumnWidths(state.columnWidths);
+    });
+    return () => {
+      offCapture();
+      offRestore();
+    };
+  }, [activeDiffRowRef, currentMatchIndex]);
 
   useEffect(() => {
     if (!rowContextMenu) return;
@@ -322,6 +374,10 @@ export default function DiffView() {
     const sheetSessionKey = `${selectedFilePair?.oldPath ?? ""}:${selectedFilePair?.newPath ?? ""}:${currentSheet}`;
     if (newSheet && sheetSessionKey !== prevSheetRef.current) {
       prevSheetRef.current = sheetSessionKey;
+      if (restoredSnapshotRef.current) {
+        restoredSnapshotRef.current = false;
+        return;
+      }
       setEffectiveNewRows(newSheet.rows.map((r) => r.map((c) => ({ ...c }))));
       useEditStore.getState().clear();
       setLeftSelected([]); setRightSelected([]);
@@ -384,17 +440,19 @@ export default function DiffView() {
   const loadVcsInfo = useCallback(async (cancelled: () => boolean) => {
     const oldPath = selectedFilePair?.oldPath ?? null;
     const newPath = selectedFilePair?.newPath ?? null;
-    setLeftVcsInfo(oldPath ? null : { kind: "none", path: "" });
-    setRightVcsInfo(newPath ? null : { kind: "none", path: "" });
+    const presetOldInfo = selectedFilePair?.oldVcsInfo;
+    const presetNewInfo = selectedFilePair?.newVcsInfo;
+    setLeftVcsInfo(presetOldInfo ?? (oldPath ? null : { kind: "none", path: "" }));
+    setRightVcsInfo(presetNewInfo ?? (newPath ? null : { kind: "none", path: "" }));
 
     const [leftResult, rightResult] = await Promise.allSettled([
-      oldPath ? getVcsFileInfo(oldPath) : Promise.resolve(null),
-      newPath ? getVcsFileInfo(newPath) : Promise.resolve(null),
+      presetOldInfo ? Promise.resolve(presetOldInfo) : oldPath ? getVcsFileInfo(oldPath) : Promise.resolve(null),
+      presetNewInfo ? Promise.resolve(presetNewInfo) : newPath ? getVcsFileInfo(newPath) : Promise.resolve(null),
     ]);
     if (cancelled()) return;
     if (leftResult.status === "fulfilled") setLeftVcsInfo(leftResult.value);
     if (rightResult.status === "fulfilled") setRightVcsInfo(rightResult.value);
-  }, [selectedFilePair?.newPath, selectedFilePair?.oldPath]);
+  }, [selectedFilePair?.newPath, selectedFilePair?.newVcsInfo, selectedFilePair?.oldPath, selectedFilePair?.oldVcsInfo]);
 
   useEffect(() => {
     let cancelled = false;
@@ -421,6 +479,7 @@ export default function DiffView() {
   // Keyboard shortcuts — register once, read latest values via refs
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isActiveDiffViewRef.current) return;
       const ss = showSearchRef.current;
       const st = searchTextRef.current;
       const ls = leftSelectedRef.current;
@@ -515,10 +574,18 @@ export default function DiffView() {
     [diffBlocks, diffResult]
   );
 
+  const scrollBothGridsToRowRef = useCallback((rowRef: string) => {
+    window.requestAnimationFrame(() => {
+      oldGridRef.current?.scrollToRowRef(rowRef);
+      newGridRef.current?.scrollToRowRef(rowRef);
+    });
+  }, []);
+
   const jumpToDiffBlock = useCallback((block: DiffBlock) => {
     setActiveDiffRowRef(block.startRef);
     setDiffJumpSignal((value) => value + 1);
-  }, []);
+    scrollBothGridsToRowRef(block.startRef);
+  }, [scrollBothGridsToRowRef]);
 
   // Navigate to next/prev diff
   const navigateDiff = useCallback(
@@ -533,8 +600,9 @@ export default function DiffView() {
         : (idx - 1 + diffBlocks.length) % diffBlocks.length;
       setActiveDiffRowRef(diffBlocks[nextIdx].startRef);
       setDiffJumpSignal((value) => value + 1);
+      scrollBothGridsToRowRef(diffBlocks[nextIdx].startRef);
     },
-    [activeDiffRowRef, diffBlocks, findDiffBlockIndexByRef, leftSelected, rightSelected]
+    [activeDiffRowRef, diffBlocks, findDiffBlockIndexByRef, leftSelected, rightSelected, scrollBothGridsToRowRef]
   );
   navigateDiffRef.current = navigateDiff;
 
@@ -545,13 +613,15 @@ export default function DiffView() {
     if (oldDir) { try { setOldFiles(await listExcelFiles(oldDir)); } catch {} }
     if (newDir) { try { setNewFiles(await listExcelFiles(newDir)); } catch {} }
     await buildFilePairs();
+    const activeTab = tabs.find((tab) => tab.id === activeTabId);
+    activateFileListTab(activeTab?.type === "diff" ? activeTab.parentTabId : undefined);
     setView("directory");
     if (relativePath) {
       window.setTimeout(() => {
         void refreshAndVerifyFilePair(relativePath);
       }, 0);
     }
-  }, [setView, hasLocalUnsavedChanges, selectedFilePair, refreshAndVerifyFilePair]);
+  }, [activateFileListTab, activeTabId, setView, hasLocalUnsavedChanges, selectedFilePair, refreshAndVerifyFilePair, tabs]);
 
   async function refreshAndVerifyFilePair(relativePath: string) {
     const { oldDir, newDir, setOldFiles, setNewFiles, buildFilePairs, verifyFilePair } = useDiffStore.getState();
@@ -563,13 +633,7 @@ export default function DiffView() {
 
   const markCurrentFileStatus = useCallback((diffStatus: "identical" | "different" | "unknown") => {
     if (!selectedFilePair) return;
-    useDiffStore.setState((state) => ({
-      filePairs: state.filePairs.map((pair) =>
-        pair.relativePath === selectedFilePair.relativePath
-          ? { ...pair, diffStatus }
-          : pair
-      ),
-    }));
+    useDiffStore.getState().markFileStatus(selectedFilePair.relativePath, diffStatus);
   }, [selectedFilePair]);
 
   const isRightDirty = useCallback(
@@ -632,21 +696,11 @@ export default function DiffView() {
     if (metricsTimerRef.current !== null) {
       window.clearTimeout(metricsTimerRef.current);
     }
-    if (scrollSyncFrameRef.current !== null) {
-      window.cancelAnimationFrame(scrollSyncFrameRef.current);
-    }
   }, []);
 
   const handleGridScroll = useCallback((scrollTop: number, scrollLeft: number, _rowIndex: number, source: "old" | "new") => {
-    pendingScrollSyncRef.current = { top: scrollTop, left: scrollLeft, source };
-    if (scrollSyncFrameRef.current !== null) return;
-    scrollSyncFrameRef.current = window.requestAnimationFrame(() => {
-      scrollSyncFrameRef.current = null;
-      const pending = pendingScrollSyncRef.current;
-      if (!pending) return;
-      const targetGrid = pending.source === "old" ? newGridRef.current : oldGridRef.current;
-      targetGrid?.syncScroll(pending.top, pending.left);
-    });
+    const targetGrid = source === "old" ? newGridRef.current : oldGridRef.current;
+    targetGrid?.syncScroll(scrollTop, scrollLeft);
   }, []);
 
   // Copy left → right (old values overwrite new)
@@ -1036,12 +1090,14 @@ export default function DiffView() {
 
   // Undo
   const handleUndo = useCallback(() => {
+    if (!isActiveDiffViewRef.current) return;
     const op = undo(); if (!op || !effectiveNewRows) return;
     const rightSnapshot = op.undoPayload.find((c) => c.columnIndex === RIGHT_ROWS_SNAPSHOT);
     if (rightSnapshot) {
       const restoredRows = (JSON.parse(rightSnapshot.value as string) as Row[]).map((r) => r.map((c) => ({ ...c })));
       setEffectiveNewRows(restoredRows);
       setRightDirty(isRightDirty(restoredRows));
+      saveActiveTabSnapshot();
       return;
     }
 
@@ -1051,6 +1107,7 @@ export default function DiffView() {
       const sheets = oldWorkbook.sheets.map((s) => s.name === currentSheet ? { ...s, rows: restoredRows } : s);
       setOldWorkbook({ ...oldWorkbook, sheets });
       setLeftDirty(true);
+      saveActiveTabSnapshot();
       return;
     }
 
@@ -1080,17 +1137,20 @@ export default function DiffView() {
     }
     setEffectiveNewRows(localRows);
     setRightDirty(isRightDirty(localRows));
-  }, [undo, effectiveNewRows, diffResult, oldWorkbook, currentSheet, setEffectiveNewRows, setOldWorkbook, isRightDirty]);
+    saveActiveTabSnapshot();
+  }, [undo, effectiveNewRows, diffResult, oldWorkbook, currentSheet, setEffectiveNewRows, setOldWorkbook, isRightDirty, saveActiveTabSnapshot]);
   undoRef.current = handleUndo;
 
   // Redo
   const handleRedo = useCallback(() => {
+    if (!isActiveDiffViewRef.current) return;
     const op = redo(); if (!op || !effectiveNewRows) return;
     const rightSnapshot = op.redoPayload.find((c) => c.columnIndex === RIGHT_ROWS_SNAPSHOT);
     if (rightSnapshot) {
       const restoredRows = (JSON.parse(rightSnapshot.value as string) as Row[]).map((r) => r.map((c) => ({ ...c })));
       setEffectiveNewRows(restoredRows);
       setRightDirty(isRightDirty(restoredRows));
+      saveActiveTabSnapshot();
       return;
     }
 
@@ -1100,6 +1160,7 @@ export default function DiffView() {
       const sheets = oldWorkbook.sheets.map((s) => s.name === currentSheet ? { ...s, rows: restoredRows } : s);
       setOldWorkbook({ ...oldWorkbook, sheets });
       setLeftDirty(true);
+      saveActiveTabSnapshot();
       return;
     }
 
@@ -1128,7 +1189,8 @@ export default function DiffView() {
     }
     setEffectiveNewRows(localRows);
     setRightDirty(isRightDirty(localRows));
-  }, [redo, effectiveNewRows, diffResult, oldWorkbook, currentSheet, setEffectiveNewRows, setOldWorkbook, isRightDirty]);
+    saveActiveTabSnapshot();
+  }, [redo, effectiveNewRows, diffResult, oldWorkbook, currentSheet, setEffectiveNewRows, setOldWorkbook, isRightDirty, saveActiveTabSnapshot]);
   redoRef.current = handleRedo;
 
   // Save
@@ -1499,7 +1561,7 @@ export default function DiffView() {
       {/* Header labels */}
       <div className="flex border-b text-xs">
         <div className="flex min-w-0 flex-1 items-center gap-2 bg-gray-50 px-3 py-1 border-r font-semibold text-gray-600">
-          <span className="shrink-0">← 左侧</span>
+          <span className="shrink-0">左侧</span>
           {leftSelected.length > 0 && <span className="shrink-0 text-blue-600">已选 {leftSelected.length} 行</span>}
           <VcsSummaryBadge label="左" path={selectedFilePair.oldPath} info={leftVcsInfo} readOnly={selectedFilePair.oldReadOnly} />
         </div>
@@ -1521,11 +1583,11 @@ export default function DiffView() {
             onScroll={handleGridScroll}
             columnWidths={columnWidths} onColumnWidthsChange={setColumnWidths}
             searchText={searchText} searchMatches={searchMatches} currentMatchIndex={currentMatchIndex}
-            scrollToRowRef={activeDiffRowRef} scrollToSignal={diffJumpSignal}
+            activeRowRef={activeDiffRowRef}
             onRowContextMenu={handleRowContextMenu} />
         </div>
 
-        {/* Center action bar — BC style */}
+        {/* Center action bar */}
         <div className={`${ACTION_COLUMN_CLASS} flex flex-col items-center bg-gray-50 border-r gap-1.5 py-2`}>
           <button
             type="button"
@@ -1537,14 +1599,14 @@ export default function DiffView() {
           <div className="flex flex-1 flex-col items-center justify-center gap-1.5">
             <button onClick={() => handleCopyLeftToRight(leftToRightRefs)} disabled={leftToRightRefs.length === 0}
               className="flex items-center gap-0.5 text-[10px] px-1.5 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-30"
-              title="Ctrl+→">
+              title="复制到右侧">
               <ArrowRight size={11} /> 复制
             </button>
             <span className="text-[10px] text-gray-400">{leftToRightRefs.length || 0} 行</span>
             <div className="w-10 border-t" />
             <button onClick={() => handleCopyRightToLeft(rightToLeftRefs)} disabled={rightToLeftRefs.length === 0}
               className="flex items-center gap-0.5 text-[10px] px-1.5 py-1 bg-purple-500 text-white rounded hover:bg-purple-600 disabled:opacity-30"
-              title="Ctrl+←">
+              title="复制到左侧">
               <ArrowLeft size={11} /> 复制
             </button>
             <span className="text-[10px] text-gray-400">{rightToLeftRefs.length || 0} 行</span>
@@ -1557,7 +1619,7 @@ export default function DiffView() {
             onScroll={handleGridScroll} onScrollMetrics={handleScrollMetrics}
             columnWidths={columnWidths} onColumnWidthsChange={setColumnWidths}
             searchText={searchText} searchMatches={searchMatches} currentMatchIndex={currentMatchIndex}
-            scrollToRowRef={activeDiffRowRef} scrollToSignal={diffJumpSignal}
+            activeRowRef={activeDiffRowRef}
             onRowContextMenu={handleRowContextMenu} />
         </div>
 
