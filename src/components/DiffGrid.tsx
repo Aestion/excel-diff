@@ -39,6 +39,7 @@ interface DiffGridProps {
 export type DiffGridHandle = {
   syncScroll: (scrollTop: number, scrollLeft: number) => void;
   scrollBy: (deltaY: number, deltaX: number) => void;
+  getScrollPosition: () => { top: number; left: number } | null;
 };
 
 const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ side, diffResult, columns, onCellEdit, onSelectionChanged, filter = "all", onScroll, onScrollMetrics, isScrollFollower = false, onFollowerWheel, columnWidths, onColumnWidthsChange, searchText, searchMatches, currentMatchIndex, scrollToRowRef, scrollToSignal, onRowContextMenu }, ref) {
@@ -129,7 +130,17 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
     }
   }, [getBodyViewport, getHorizontalViewport]);
 
-  useImperativeHandle(ref, () => ({ syncScroll, scrollBy }), [scrollBy, syncScroll]);
+  const getScrollPosition = useCallback(() => {
+    const viewport = getBodyViewport();
+    if (!viewport) return null;
+    const horizontalViewport = getHorizontalViewport();
+    return {
+      top: viewport.scrollTop,
+      left: horizontalViewport?.scrollLeft ?? viewport.scrollLeft,
+    };
+  }, [getBodyViewport, getHorizontalViewport]);
+
+  useImperativeHandle(ref, () => ({ syncScroll, scrollBy, getScrollPosition }), [getScrollPosition, scrollBy, syncScroll]);
 
   useEffect(() => {
     const container = containerRef.current;

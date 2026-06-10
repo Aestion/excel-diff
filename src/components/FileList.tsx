@@ -4,6 +4,7 @@ import { readExcel, detectKeyColumns, copyExcelFile, listExcelFiles, openVcsLog,
 import { computeDiff } from "../utils/diffEngine";
 import type { FilePair } from "../types/excel";
 import { RefreshIcon, ArrowRight, ArrowLeft, SpinnerIcon, FolderIcon, ChevronDown } from "./Icons";
+import VersionCompareDialog from "./VersionCompareDialog";
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return "";
@@ -157,6 +158,11 @@ interface ContextMenuState {
   paths: string[];
 }
 
+interface VersionCompareTarget {
+  leftPath: string | null;
+  rightPath: string | null;
+}
+
 function ContextMenu({ state, onAction, onClose }: {
   state: ContextMenuState;
   onAction: (action: string) => void;
@@ -195,6 +201,10 @@ function ContextMenu({ state, onAction, onClose }: {
       {isFile && isLeft ? (
         <>
           <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+            onClick={() => onAction("version-compare")}>
+            版本对比
+          </button>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
             onClick={() => onAction("compare-history")}>
             与历史版本比较
           </button>
@@ -210,6 +220,10 @@ function ContextMenu({ state, onAction, onClose }: {
         </>
       ) : isFile ? (
         <>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
+            onClick={() => onAction("version-compare")}>
+            版本对比
+          </button>
           <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 flex items-center gap-2"
             onClick={() => onAction("compare-history")}>
             与历史版本比较
@@ -362,6 +376,7 @@ export default function FileList() {
   const [filenameFilter, setFilenameFilter] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [versionCompareTarget, setVersionCompareTarget] = useState<VersionCompareTarget | null>(null);
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const syncingScrollRef = useRef(false);
@@ -593,6 +608,17 @@ export default function FileList() {
         await openVcsLog(contextMenu.targetPath);
       } catch (e: any) {
         alert(`打开版本记录失败: ${e?.message || String(e)}`);
+      }
+      return;
+    }
+
+    if (action === "version-compare") {
+      const pair = paths.length === 1 ? filePairs.find(p => p.relativePath === paths[0]) : null;
+      if (pair) {
+        setVersionCompareTarget({
+          leftPath: pair.oldPath ?? null,
+          rightPath: pair.newPath ?? null,
+        });
       }
       return;
     }
@@ -863,6 +889,13 @@ export default function FileList() {
       {contextMenu && (
         <ContextMenu state={contextMenu} onAction={handleContextAction}
           onClose={() => setContextMenu(null)} />
+      )}
+      {versionCompareTarget && (
+        <VersionCompareDialog
+          leftPath={versionCompareTarget.leftPath}
+          rightPath={versionCompareTarget.rightPath}
+          onClose={() => setVersionCompareTarget(null)}
+        />
       )}
     </div>
   );

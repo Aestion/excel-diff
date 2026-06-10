@@ -618,6 +618,19 @@ export default function DiffView() {
   }, []);
 
   // Copy left → right (old values overwrite new)
+  const restoreGridScrollAfterDataUpdate = useCallback(() => {
+    const position = newGridRef.current?.getScrollPosition() ?? oldGridRef.current?.getScrollPosition();
+    if (!position) return;
+    const restore = () => {
+      oldGridRef.current?.syncScroll(position.top, position.left);
+      newGridRef.current?.syncScroll(position.top, position.left);
+    };
+    window.requestAnimationFrame(() => {
+      restore();
+      window.requestAnimationFrame(restore);
+    });
+  }, []);
+
   const handleCopyLeftToRight = useCallback(
     (rowRefs: string[], mode: CopyMode = "all") => {
       const dr = diffResultRef.current;
@@ -707,11 +720,12 @@ export default function DiffView() {
 
       if (undoChanges.length > 0) {
         pushEdit({ type: "batch-copy", undoPayload: undoChanges, redoPayload: redoChanges, description: `左→右 ${copiedRows}行` });
+        restoreGridScrollAfterDataUpdate();
         setEffectiveNewRows(localRows);
         setRightDirty(isRightDirty(localRows));
       }
     },
-    [pushEdit, setEffectiveNewRows, isRightDirty]
+    [pushEdit, restoreGridScrollAfterDataUpdate, setEffectiveNewRows, isRightDirty]
   );
   copyLeftToRightRef.current = handleCopyLeftToRight;
 
@@ -774,12 +788,13 @@ export default function DiffView() {
         redoPayload: [{ rowKey: "__left_rows__", columnIndex: LEFT_ROWS_SNAPSHOT, value: JSON.stringify(modifiedOldRows) }],
         description: `右→左 ${copiedRows}行`,
       });
+      restoreGridScrollAfterDataUpdate();
       setOldWorkbook({ ...oldWorkbook, sheets });
       setLeftSelected([]);
       setRightSelected([]);
       setLeftDirty(true);
     },
-    [diffResult, effectiveNewRows, oldWorkbook, currentSheet, pushEdit, setOldWorkbook]
+    [diffResult, effectiveNewRows, oldWorkbook, currentSheet, pushEdit, restoreGridScrollAfterDataUpdate, setOldWorkbook]
   );
   copyRightToLeftRef.current = handleCopyRightToLeft;
 

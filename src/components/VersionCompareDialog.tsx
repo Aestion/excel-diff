@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { getVcsFileLog, openVcsLog } from "../api/tauri";
 import type { VcsCommitSummary } from "../types/vcs";
 
@@ -127,6 +127,7 @@ function LogList({
   activeIds,
   mergeIds,
   itemRefs,
+  onLayoutChange,
 }: {
   title: string;
   path: string | null;
@@ -137,7 +138,20 @@ function LogList({
   activeIds: Set<string>;
   mergeIds: Set<string>;
   itemRefs: MutableRefObject<Map<string, HTMLDivElement>>;
+  onLayoutChange: () => void;
 }) {
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  const toggleExpanded = (id: string) => {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    window.requestAnimationFrame(onLayoutChange);
+  };
+
   return (
     <div className="min-w-0">
       <div className="mb-2 flex items-center gap-2">
@@ -164,6 +178,9 @@ function LogList({
           const highlighted = highlightedIds.has(item.id);
           const active = activeIds.has(item.id);
           const isMerge = mergeIds.has(item.id);
+          const message = item.message || "(无提交说明)";
+          const expanded = expandedIds.has(item.id);
+          const canToggle = message.length > 36;
           return (
             <div
               key={`${item.id}-${item.date ?? ""}`}
@@ -185,8 +202,22 @@ function LogList({
                 <span className="rounded bg-emerald-50 px-1.5 font-semibold text-emerald-700">{formatDate(item.date)}</span>
                 {isMerge && <span className="rounded bg-amber-100 px-1.5 font-semibold text-amber-700">merge</span>}
               </div>
-              <div className="mt-1 overflow-hidden text-ellipsis whitespace-nowrap text-gray-700" title={item.message}>
-                {item.message || "(无提交说明)"}
+              <div className="mt-1 flex items-start gap-2">
+                <div
+                  className={`min-w-0 flex-1 text-gray-700 ${expanded ? "whitespace-pre-wrap break-words leading-5" : "overflow-hidden text-ellipsis whitespace-nowrap"}`}
+                  title={expanded ? undefined : message}
+                >
+                  {message}
+                </div>
+                {canToggle && (
+                  <button
+                    type="button"
+                    className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-blue-600 hover:bg-blue-50"
+                    onClick={() => toggleExpanded(item.id)}
+                  >
+                    {expanded ? "收起" : "展开"}
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -334,8 +365,8 @@ export default function VersionCompareDialog({ leftPath, rightPath, onClose }: V
                     fill="none"
                     stroke="#2563eb"
                     strokeDasharray="6 5"
-                    strokeOpacity={active ? 0.95 : 0.22}
-                    strokeWidth={active ? "2.6" : "1.4"}
+                    strokeOpacity={active ? 0.98 : 0.48}
+                    strokeWidth={active ? "2.8" : "1.9"}
                   />
                 </g>
               );
@@ -353,6 +384,7 @@ export default function VersionCompareDialog({ leftPath, rightPath, onClose }: V
               activeIds={activeLeftIds}
               mergeIds={leftMergeIds}
               itemRefs={leftRefs}
+              onLayoutChange={() => setLayoutVersion((value) => value + 1)}
             />
           </div>
 
@@ -372,7 +404,7 @@ export default function VersionCompareDialog({ leftPath, rightPath, onClose }: V
                   className={`w-full rounded border px-2 py-1 text-left text-[11px] ${
                     activeRelation?.key === relation.key
                       ? "border-blue-400 bg-blue-100 text-blue-800"
-                      : "border-blue-100 bg-white/90 text-blue-700 hover:bg-blue-50"
+                      : "border-blue-200 bg-blue-50/80 text-blue-800 hover:border-blue-300 hover:bg-blue-100"
                   }`}
                 >
                   {relation.label}
@@ -392,6 +424,7 @@ export default function VersionCompareDialog({ leftPath, rightPath, onClose }: V
               activeIds={activeRightIds}
               mergeIds={rightMergeIds}
               itemRefs={rightRefs}
+              onLayoutChange={() => setLayoutVersion((value) => value + 1)}
             />
           </div>
         </div>
