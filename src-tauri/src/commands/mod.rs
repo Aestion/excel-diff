@@ -39,6 +39,10 @@ fn collect_excel_files(
             let file_name = entry.file_name().to_string_lossy().to_string();
             let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
 
+            if file_name.starts_with("~$") {
+                continue;
+            }
+
             if extensions.contains(&ext.as_str()) {
                 let relative = path
                     .strip_prefix(base)
@@ -177,7 +181,7 @@ pub fn detect_key_columns(file_path: String, sheet_name: String) -> Result<Vec<u
         .find(|s| s.name == sheet_name)
         .ok_or_else(|| format!("未找到 Sheet '{}'", sheet_name))?;
 
-    if sheet.rows.len() < 2 {
+    if sheet.rows.len() < 3 {
         return Ok(vec![]);
     }
 
@@ -197,7 +201,7 @@ pub fn detect_key_columns(file_path: String, sheet_name: String) -> Result<Vec<u
 
         let mut values: Vec<String> = Vec::new();
         let mut total = 0usize;
-        for row in sheet.rows.iter().skip(1) {
+        for row in sheet.rows.iter().skip(2) {
             total += 1;
             if col_idx < row.len() {
                 let val = match &row[col_idx].value {

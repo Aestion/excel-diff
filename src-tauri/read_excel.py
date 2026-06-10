@@ -39,10 +39,12 @@ def main():
             max_row = ws.max_row
             max_col = ws.max_column
 
-            # Read headers
+            # Read headers. Row 1 is an optional note row in these config sheets;
+            # row 2 contains the required field names.
+            header_row = 2 if max_row >= 2 else 1
             columns = []
             for col_idx in range(1, max_col + 1):
-                cell = ws.cell(row=1, column=col_idx)
+                cell = ws.cell(row=header_row, column=col_idx)
                 val = get_val(cell)
                 name = val or f"Column {col_idx}"
                 columns.append({"index": col_idx - 1, "name": str(name), "dataType": "mixed"})

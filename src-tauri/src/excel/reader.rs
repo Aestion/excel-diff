@@ -31,9 +31,11 @@ pub fn read_workbook(file_path: &str) -> Result<ParsedWorkbook, String> {
             }).collect::<Vec<_>>()
         }).collect::<Vec<_>>();
 
-        // Build columns from first row (header)
-        let columns = if !rows.is_empty() {
-            rows[0].iter().enumerate().map(|(i, cell)| {
+        // Build columns from the second row. In these config sheets, row 1 is an optional note row
+        // and row 2 contains the required field names.
+        let header_row = rows.get(1).or_else(|| rows.get(0));
+        let columns = if let Some(header_row) = header_row {
+            header_row.iter().enumerate().map(|(i, cell)| {
                 let name = match &cell.value {
                     serde_json::Value::String(s) => s.clone(),
                     serde_json::Value::Number(n) => format!("{}", n),

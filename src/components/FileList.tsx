@@ -163,6 +163,16 @@ interface VersionCompareTarget {
   rightPath: string | null;
 }
 
+function getContextMenuPosition(x: number, y: number, kind: "file" | "folder") {
+  const margin = 8;
+  const width = 180;
+  const estimatedHeight = kind === "file" ? 292 : 142;
+  return {
+    x: Math.max(margin, Math.min(x, window.innerWidth - width - margin)),
+    y: Math.max(margin, Math.min(y, window.innerHeight - estimatedHeight - margin)),
+  };
+}
+
 function ContextMenu({ state, onAction, onClose }: {
   state: ContextMenuState;
   onAction: (action: string) => void;
@@ -594,7 +604,8 @@ export default function FileList() {
     if (kind === "file" && path && !selectedPaths.has(path)) {
       setSelectedPaths(new Set([path]));
     }
-    setContextMenu({ x: e.clientX, y: e.clientY, side, targetKind: kind, targetPath, relativePath: path, paths });
+    const position = getContextMenuPosition(e.clientX, e.clientY, kind);
+    setContextMenu({ x: position.x, y: position.y, side, targetKind: kind, targetPath, relativePath: path, paths });
   }, [resolveContextTarget, selectedPaths]);
 
   // Context menu action

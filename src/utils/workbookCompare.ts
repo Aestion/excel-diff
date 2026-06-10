@@ -33,7 +33,7 @@ function serializeKeyValue(value: unknown): string {
 }
 
 export function detectSemanticKeyColumns(sheet: SheetData): number[] {
-  if (sheet.rows.length < 2) return [];
+  if (sheet.rows.length < 3) return [];
   const colCount = sheet.columns.length;
   const scores: Array<{ index: number; score: number }> = [];
 
@@ -42,8 +42,8 @@ export function detectSemanticKeyColumns(sheet: SheetData): number[] {
     if (!header || header === "None" || header.startsWith("Column ")) continue;
 
     const values: string[] = [];
-    const total = sheet.rows.length - 1;
-    for (let rowIndex = 1; rowIndex < sheet.rows.length; rowIndex++) {
+    const total = sheet.rows.length - 2;
+    for (let rowIndex = 2; rowIndex < sheet.rows.length; rowIndex++) {
       const value = sheet.rows[rowIndex]?.[col]?.value;
       const keyValue = serializeKeyValue(value);
       if (keyValue !== "") values.push(keyValue);

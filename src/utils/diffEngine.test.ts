@@ -137,6 +137,38 @@ describe('computeDiff', () => {
     ]);
   });
 
+  it('shows right-only rows at matching blank old positions', () => {
+    const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Before'],
+      [null, null],
+      [null, null],
+      [null, null],
+      ['10', 'After'],
+    ]);
+    const newSheet = makeSheet('Sheet1', ['ID', 'Name'], [
+      ['1', 'Before'],
+      [null, null],
+      ['5', 'Inserted'],
+      [null, null],
+      ['10', 'After'],
+    ]);
+
+    const result = computeDiff(oldSheet, newSheet, [0]);
+
+    expect(result.diffRows.map((row) => ({
+      status: row.status,
+      oldRowNumber: row.oldRowNumber,
+      newRowNumber: row.newRowNumber,
+      newId: row.newRow?.[0]?.value ?? null,
+    }))).toEqual([
+      { status: 'unchanged', oldRowNumber: 2, newRowNumber: 2, newId: '1' },
+      { status: 'unchanged', oldRowNumber: 3, newRowNumber: 3, newId: null },
+      { status: 'added', oldRowNumber: null, newRowNumber: 4, newId: '5' },
+      { status: 'unchanged', oldRowNumber: 4, newRowNumber: 5, newId: null },
+      { status: 'unchanged', oldRowNumber: 6, newRowNumber: 6, newId: '10' },
+    ]);
+  });
+
   it('does not render empty placeholders as extra added rows after a deletion', () => {
     const oldSheet = makeSheet('Sheet1', ['ID', 'Name'], [
       ['1', 'Alice'],

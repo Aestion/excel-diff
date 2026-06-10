@@ -275,6 +275,8 @@ export function computeDiff(
         const samePositionNewRow = newSheet.rows[i];
         if (!consumedNew.has(i) && rowIsEmpty(samePositionNewRow)) {
           consumedNew.add(i);
+        } else if (!consumedNew.has(i) && samePositionNewRow && !rowIsEmpty(samePositionNewRow)) {
+          pushAddedNewRow(i);
         }
         consumedOld.add(i);
         continue;

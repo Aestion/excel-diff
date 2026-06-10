@@ -21,6 +21,38 @@ function findDiffRowByRef(diffResult: DiffResult | null, rowRef: string): DiffRo
   return diffResult?.diffRows.find((row) => getDiffRowRef(row) === rowRef);
 }
 
+function clampInsertIndex(index: number, rowCount: number): number {
+  return Math.max(0, Math.min(rowCount, index));
+}
+
+function findVisualInsertIndex(
+  diffRows: DiffRow[],
+  rowRef: string,
+  targetSide: "old" | "new",
+  fallbackRowNumber: number | null | undefined,
+  rowCount: number
+): number {
+  const index = diffRows.findIndex((row) => getDiffRowRef(row) === rowRef);
+  const getRowNumber = (row: DiffRow) => targetSide === "old" ? row.oldRowNumber : row.newRowNumber;
+
+  if (index >= 0) {
+    for (let i = index - 1; i >= 0; i--) {
+      const rowNumber = getRowNumber(diffRows[i]);
+      if (rowNumber != null) return clampInsertIndex(rowNumber, rowCount);
+    }
+    for (let i = index + 1; i < diffRows.length; i++) {
+      const rowNumber = getRowNumber(diffRows[i]);
+      if (rowNumber != null) return clampInsertIndex(rowNumber - 1, rowCount);
+    }
+  }
+
+  return clampInsertIndex((fallbackRowNumber ?? rowCount + 1) - 1, rowCount);
+}
+
+function rowIsEmpty(row: Row | undefined): boolean {
+  return !row || row.every((cell) => cellDataEqual(cell, undefined));
+}
+
 type DiffBlock = {
   id: string;
   startIndex: number;
@@ -625,10 +657,14 @@ export default function DiffView() {
       oldGridRef.current?.syncScroll(position.top, position.left);
       newGridRef.current?.syncScroll(position.top, position.left);
     };
-    window.requestAnimationFrame(() => {
+    let frame = 0;
+    const restoreNextFrame = () => {
       restore();
-      window.requestAnimationFrame(restore);
-    });
+      frame += 1;
+      if (frame < 6) window.requestAnimationFrame(restoreNextFrame);
+    };
+    window.requestAnimationFrame(restoreNextFrame);
+    window.setTimeout(restore, 120);
   }, []);
 
   const handleCopyLeftToRight = useCallback(
@@ -647,9 +683,25 @@ export default function DiffView() {
         const rowB = findDiffRowByRef(dr, b);
         const isRightOnlyA = rowA?.status === "added" && !rowA.oldRow;
         const isRightOnlyB = rowB?.status === "added" && !rowB.oldRow;
-        if (isRightOnlyA && isRightOnlyB) {
-          return (rowB?.newRowNumber ?? 0) - (rowA?.newRowNumber ?? 0);
+        const isLeftOnlyA = rowA?.status === "deleted" && !rowA.newRow;
+        const isLeftOnlyB = rowB?.status === "deleted" && !rowB.newRow;
+        const structuralA = isRightOnlyA || isLeftOnlyA;
+        const structuralB = isRightOnlyB || isLeftOnlyB;
+        if (!structuralA && structuralB) return -1;
+        if (structuralA && !structuralB) return 1;
+        if (structuralA && structuralB) {
+          const targetA = isRightOnlyA
+            ? (rowA?.newRowNumber ?? localRows.length + 1) - 1
+            : findVisualInsertIndex(dr.diffRows, a, "new", rowA?.oldRowNumber, localRows.length);
+          const targetB = isRightOnlyB
+            ? (rowB?.newRowNumber ?? localRows.length + 1) - 1
+            : findVisualInsertIndex(dr.diffRows, b, "new", rowB?.oldRowNumber, localRows.length);
+          if (targetA !== targetB) return targetB - targetA;
+          if (isRightOnlyA && isLeftOnlyB) return -1;
+          if (isLeftOnlyA && isRightOnlyB) return 1;
         }
+        if (isLeftOnlyA) return -1;
+        if (isLeftOnlyB) return 1;
         if (isRightOnlyA) return -1;
         if (isRightOnlyB) return 1;
         return 0;
@@ -710,16 +762,20 @@ export default function DiffView() {
           }
         } else {
           // Row only on left → insert
-          const insertIdx = localRows.length;
+          const insertIdx = findVisualInsertIndex(dr.diffRows, rowRef, "new", diffRow.oldRowNumber, localRows.length);
           undoChanges.push({ rowKey: key, rowRef, columnIndex: -1, value: null, formula: String(insertIdx) });
           redoChanges.push({ rowKey: key, rowRef, columnIndex: -2, value: JSON.stringify(oldRow), formula: String(insertIdx) });
-          localRows.push(oldRow.map((c) => ({ ...c })));
+          if (rowIsEmpty(localRows[insertIdx])) {
+            localRows[insertIdx] = oldRow.map((c) => ({ ...c }));
+          } else {
+            localRows.splice(insertIdx, 0, oldRow.map((c) => ({ ...c })));
+          }
         }
         if (undoChanges.length > beforeChangeCount) copiedRows++;
       }
 
       if (undoChanges.length > 0) {
-        pushEdit({ type: "batch-copy", undoPayload: undoChanges, redoPayload: redoChanges, description: `左→右 ${copiedRows}行` });
+        pushEdit({ type: "batch-copy", undoPayload: [{ rowKey: "__right_rows__", columnIndex: RIGHT_ROWS_SNAPSHOT, value: JSON.stringify(originalRows) }], redoPayload: [{ rowKey: "__right_rows__", columnIndex: RIGHT_ROWS_SNAPSHOT, value: JSON.stringify(localRows) }], description: `左→右 ${copiedRows}行` });
         restoreGridScrollAfterDataUpdate();
         setEffectiveNewRows(localRows);
         setRightDirty(isRightDirty(localRows));
@@ -741,15 +797,30 @@ export default function DiffView() {
       const originalOldRows = oldSheetData.rows.map((r) => r.map((c) => ({ ...c })));
       const modifiedOldRows = oldSheetData.rows.map((r) => r.map((c) => ({ ...c })));
       let copiedRows = 0;
+      const orderedRowRefs = [...rowRefs].sort((a, b) => {
+        const rowA = findDiffRowByRef(diffResult, a);
+        const rowB = findDiffRowByRef(diffResult, b);
+        const isAddedA = !!rowA?.newRow && !rowA.oldRow;
+        const isAddedB = !!rowB?.newRow && !rowB.oldRow;
+        if (isAddedA && isAddedB) return (rowB?.newRowNumber ?? 0) - (rowA?.newRowNumber ?? 0);
+        if (isAddedA) return 1;
+        if (isAddedB) return -1;
+        return 0;
+      });
 
-      for (const rowRef of rowRefs) {
+      for (const rowRef of orderedRowRefs) {
         const dr = findDiffRowByRef(diffResult, rowRef);
         if (!dr || !shouldCopyRightToLeft(dr, mode)) continue;
 
         const idx = dr.oldRowNumber ? dr.oldRowNumber - 1 : -1;
         if (idx < 0) {
           if (dr.newRow && (mode === "all" || mode === "added")) {
-            modifiedOldRows.push(dr.newRow.map((c) => ({ ...c })));
+            const insertIdx = findVisualInsertIndex(diffResult.diffRows, rowRef, "old", dr.newRowNumber, modifiedOldRows.length);
+            if (rowIsEmpty(modifiedOldRows[insertIdx])) {
+              modifiedOldRows[insertIdx] = dr.newRow.map((c) => ({ ...c }));
+            } else {
+              modifiedOldRows.splice(insertIdx, 0, dr.newRow.map((c) => ({ ...c })));
+            }
             copiedRows++;
           }
           continue;

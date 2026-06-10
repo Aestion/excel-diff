@@ -64,10 +64,11 @@ def main():
                 })
                 continue
 
-            # Build columns from first row (headers)
+            # Build columns from row 2. Row 1 is an optional note row in these config sheets.
+            header_row = 2 if row_count >= 2 else 1
             columns = []
             for col_idx in range(1, col_count + 1):
-                val = used(1, col_idx).value
+                val = used(header_row, col_idx).value
                 name = get_val(val) or f"Column {col_idx}"
                 columns.append({"index": col_idx - 1, "name": str(name), "dataType": "mixed"})
 

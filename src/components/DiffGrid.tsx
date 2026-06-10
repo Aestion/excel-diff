@@ -291,7 +291,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
       gridRef.current?.api.redrawRows();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [scrollToRowRef, scrollToSignal, rowData]);
+  }, [scrollToSignal]);
 
   // Listen to vertical and horizontal scroll events on the AG Grid viewports.
   useEffect(() => {
@@ -324,6 +324,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
       <AgGridReact
         ref={gridRef}
         columnDefs={columnDefs} rowData={rowData}
+        getRowId={(params) => params.data._rowRef}
         getRowClass={getRowClass}
         onCellValueChanged={handleCellValueChanged}
         onCellContextMenu={handleCellContextMenu}
@@ -338,6 +339,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
         rowHeight={ROW_HEIGHT} headerHeight={30}
         rowBuffer={VIRTUAL_ROW_BUFFER}
         animateRows={false}
+        suppressScrollOnNewData={true}
         suppressRowHoverHighlight={true}
         suppressCellFocus={!onCellEdit}
         stopEditingWhenCellsLoseFocus={true}
