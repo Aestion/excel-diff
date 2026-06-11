@@ -50,6 +50,12 @@ interface DiffState {
   updateNewCell: (rowIndex: number, colIndex: number, value: CellValue) => void;
   markFileStatus: (relativePath: string, diffStatus: DiffStatus) => void;
   markFileAsIdentical: (relativePath: string) => void;
+  restoreSnapshot: (snapshot: Pick<DiffState,
+    'selectedFilePair' | 'oldWorkbook' | 'newWorkbook' |
+    'currentSheet' | 'diffResult' | 'keyColumnIndices' |
+    'effectiveNewRows' | 'hasUnsavedChanges'
+  >) => void;
+  _restoringSnapshot: boolean;
 }
 
 export const useDiffStore = create<DiffState>((set, get) => ({
@@ -326,4 +332,6 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   markFileAsIdentical: (relativePath) => {
     get().markFileStatus(relativePath, "identical");
   },
+  restoreSnapshot: (snapshot) => set({ ...snapshot, _restoringSnapshot: true }),
+  _restoringSnapshot: false,
 }));

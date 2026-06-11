@@ -1,4 +1,4 @@
-import { forwardRef, useMemo, useCallback, useRef, useEffect, useImperativeHandle } from "react";
+import { forwardRef, memo, useMemo, useCallback, useRef, useEffect, useImperativeHandle } from "react";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, RowClassParams, CellValueChangedEvent, CellContextMenuEvent } from "ag-grid-community";
 import "ag-grid-community/styles/ag-grid.css";
@@ -10,6 +10,14 @@ const ROW_HEIGHT = 26;
 const VIRTUAL_ROW_BUFFER = 20;
 const SCROLL_SYNC_HOLD_MS = 80;
 const ROW_NUMBER_COL_ID = "_rowNumber";
+
+const DEFAULT_COL_DEF: ColDef = { sortable: false, resizable: true };
+const ROW_SELECTION_CONFIG = {
+  mode: "multiRow" as const,
+  checkboxes: true,
+  headerCheckbox: true,
+  enableClickSelection: true,
+};
 
 function getDiffRowRef(row: DiffRow): string {
   return `${row.oldRowNumber ?? ""}:${row.newRowNumber ?? ""}:${row.viewIndex}`;
@@ -43,6 +51,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
   const gridRef = useRef<AgGridReact>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const syncingRef = useRef(false);
+  const syncTargetRef = useRef<{ top: number; left: number } | null>(null);
   const syncReleaseTimerRef = useRef<number | null>(null);
 
   const getBodyViewport = useCallback(() => (
@@ -80,13 +89,24 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
     return current ? `${current.rowRef}:${current.side}:${current.colIndex}` : null;
   }, [currentMatchIndex, searchMatches, searchText]);
 
-  const holdScrollEvents = useCallback(() => {
+  const releaseScrollHold = useCallback(() => {
+    syncingRef.current = false;
+    syncTargetRef.current = null;
+    if (syncReleaseTimerRef.current !== null) {
+      window.clearTimeout(syncReleaseTimerRef.current);
+      syncReleaseTimerRef.current = null;
+    }
+  }, []);
+
+  const holdScrollEvents = useCallback((scrollTop: number, scrollLeft: number) => {
     syncingRef.current = true;
+    syncTargetRef.current = { top: scrollTop, left: scrollLeft };
     if (syncReleaseTimerRef.current !== null) {
       window.clearTimeout(syncReleaseTimerRef.current);
     }
     syncReleaseTimerRef.current = window.setTimeout(() => {
       syncingRef.current = false;
+      syncTargetRef.current = null;
       syncReleaseTimerRef.current = null;
     }, SCROLL_SYNC_HOLD_MS);
   }, []);
@@ -100,7 +120,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
   const syncScroll = useCallback((scrollTop: number, scrollLeft: number) => {
     if (!containerRef.current) return;
 
-    holdScrollEvents();
+    holdScrollEvents(scrollTop, scrollLeft);
     const viewport = getBodyViewport();
     const horizontalViewport = getHorizontalViewport();
     if (viewport && Math.abs(viewport.scrollTop - scrollTop) > 1) {
@@ -271,8 +291,20 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
     if (!viewport) return;
 
     const handler = () => {
-      if (syncingRef.current) return;
-      onScroll?.(viewport.scrollTop, horizontalViewport?.scrollLeft ?? viewport.scrollLeft, readFirstDisplayedRowIndex(), side);
+      const scrollTop = viewport.scrollTop;
+      const scrollLeft = horizontalViewport?.scrollLeft ?? viewport.scrollLeft;
+      if (syncingRef.current) {
+        const target = syncTargetRef.current;
+        const isProgrammaticSyncEvent = target
+          && Math.abs(scrollTop - target.top) <= 1
+          && Math.abs(scrollLeft - target.left) <= 1;
+        if (isProgrammaticSyncEvent) {
+          reportScrollMetrics(viewport);
+          return;
+        }
+        releaseScrollHold();
+      }
+      onScroll?.(scrollTop, scrollLeft, readFirstDisplayedRowIndex(), side);
       reportScrollMetrics(viewport);
     };
     reportScrollMetrics(viewport);
@@ -283,7 +315,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
       viewport.removeEventListener('scroll', handler);
       horizontalViewport?.removeEventListener('scroll', handler);
     };
-  }, [getBodyViewport, getHorizontalViewport, onScroll, readFirstDisplayedRowIndex, reportScrollMetrics, rowData, side]); // re-attach when data changes
+  }, [getBodyViewport, getHorizontalViewport, onScroll, readFirstDisplayedRowIndex, releaseScrollHold, reportScrollMetrics, rowData, side]);
 
   return (
     <div
@@ -300,12 +332,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
         onCellContextMenu={handleCellContextMenu}
         onColumnResized={handleColumnResized}
         onSelectionChanged={handleSelectionChanged}
-        rowSelection={{
-          mode: "multiRow",
-          checkboxes: true,
-          headerCheckbox: true,
-          enableClickSelection: true,
-        }}
+        rowSelection={ROW_SELECTION_CONFIG}
         rowHeight={ROW_HEIGHT} headerHeight={30}
         rowBuffer={VIRTUAL_ROW_BUFFER}
         animateRows={false}
@@ -314,10 +341,10 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
         suppressCellFocus={!onCellEdit}
         stopEditingWhenCellsLoseFocus={true}
         suppressContextMenu={true}
-        defaultColDef={{ sortable: false, resizable: true }}
+        defaultColDef={DEFAULT_COL_DEF}
       />
     </div>
   );
 });
 
-export default DiffGrid;
+export default memo(DiffGrid);

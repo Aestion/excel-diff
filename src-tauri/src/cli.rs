@@ -6,6 +6,7 @@ mod excel;
 #[allow(dead_code)]
 #[path = "models/mod.rs"]
 mod models;
+mod utils;
 
 use std::env;
 use std::process;
@@ -376,8 +377,10 @@ fn cmd_merge_rows(args: &[String]) -> Result<(), String> {
 
     let script = find_write_script()?;
     let (python, python_args) = find_python3()?;
-    let output = std::process::Command::new(&python).args(&python_args).arg(&script).arg(new_file).arg(&json_path)
-        .output().map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(&python);
+    cmd.args(&python_args).arg(&script).arg(new_file).arg(&json_path);
+    utils::hide_console(&mut cmd);
+    let output = cmd.output().map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&json_path);
 
     if !output.status.success() {
@@ -432,8 +435,10 @@ fn cmd_edit_cell(args: &[String]) -> Result<(), String> {
 
             let script = find_write_script()?;
             let (python, python_args) = find_python3()?;
-            let output = std::process::Command::new(&python).args(&python_args).arg(&script).arg(file).arg(&json_path)
-                .output().map_err(|e| e.to_string())?;
+            let mut cmd = std::process::Command::new(&python);
+            cmd.args(&python_args).arg(&script).arg(file).arg(&json_path);
+            utils::hide_console(&mut cmd);
+            let output = cmd.output().map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(&json_path);
 
             if !output.status.success() {
@@ -476,11 +481,10 @@ fn python3_candidates() -> Vec<(&'static str, Vec<&'static str>)> {
 }
 
 fn command_version(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program)
-        .args(args)
-        .arg("--version")
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).arg("--version");
+    utils::hide_console(&mut cmd);
+    let output = cmd.output().ok()?;
 
     let text = if output.stdout.is_empty() {
         String::from_utf8_lossy(&output.stderr).to_string()

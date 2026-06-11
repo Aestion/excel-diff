@@ -36,13 +36,15 @@ export function captureDiffTabSnapshot(uiState?: DiffTabUiState): DiffTabSnapsho
 
 export function restoreDiffTabSnapshot(snapshot: DiffTabSnapshot): void {
   const state = useDiffStore.getState();
-  state.selectFilePair(snapshot.selectedFilePair);
-  state.setOldWorkbook(snapshot.oldWorkbook);
-  state.setNewWorkbook(snapshot.newWorkbook);
-  state.setCurrentSheet(snapshot.currentSheet);
-  state.setDiffResult(snapshot.diffResult);
-  state.setKeyColumnIndices(snapshot.keyColumnIndices);
-  state.setEffectiveNewRows(snapshot.effectiveNewRows);
-  state.setHasUnsavedChanges(snapshot.hasUnsavedChanges);
+  state.restoreSnapshot({
+    selectedFilePair: snapshot.selectedFilePair,
+    oldWorkbook: snapshot.oldWorkbook,
+    newWorkbook: snapshot.newWorkbook,
+    currentSheet: snapshot.currentSheet,
+    diffResult: snapshot.diffResult,
+    keyColumnIndices: snapshot.keyColumnIndices,
+    effectiveNewRows: snapshot.effectiveNewRows,
+    hasUnsavedChanges: snapshot.hasUnsavedChanges,
+  });
   useEditStore.getState().setStacks([...(snapshot.undoStack ?? [])], [...(snapshot.redoStack ?? [])]);
 }

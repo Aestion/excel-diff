@@ -267,8 +267,10 @@ pub fn open_in_file_explorer(path: String) -> Result<(), String> {
 }
 
 #[command]
-pub fn get_vcs_file_info(path: String) -> Result<vcs::VcsFileInfo, String> {
-    vcs::get_vcs_file_info(&path)
+pub async fn get_vcs_file_info(path: String) -> Result<vcs::VcsFileInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || vcs::get_vcs_file_info(&path))
+        .await
+        .map_err(|e| format!("获取版本信息任务失败: {}", e))?
 }
 
 #[command]

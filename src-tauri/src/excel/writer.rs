@@ -148,11 +148,10 @@ fn python3_candidates() -> Vec<(String, Vec<String>)> {
 }
 
 fn command_version(program: &str, args: &[String]) -> Option<String> {
-    let output = Command::new(program)
-        .args(args)
-        .arg("--version")
-        .output()
-        .ok()?;
+    let mut cmd = Command::new(program);
+    cmd.args(args).arg("--version");
+    crate::utils::hide_console(&mut cmd);
+    let output = cmd.output().ok()?;
 
     let text = if output.stdout.is_empty() {
         String::from_utf8_lossy(&output.stderr).to_string()
@@ -255,10 +254,10 @@ fn dependency_name(engine: ExcelEngine) -> &'static str {
 
 fn python_has_dependency(env: &PythonEnv, package: &str) -> bool {
     let import_stmt = format!("import {}", package);
-    Command::new(&env.program)
-        .args(&env.args)
-        .args(["-c", &import_stmt])
-        .output()
+    let mut cmd = Command::new(&env.program);
+    cmd.args(&env.args).args(["-c", &import_stmt]);
+    crate::utils::hide_console(&mut cmd);
+    cmd.output()
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
@@ -266,9 +265,10 @@ fn python_has_dependency(env: &PythonEnv, package: &str) -> bool {
 fn check_python_dependency(env: &PythonEnv, engine: ExcelEngine) -> Result<(), String> {
     let package = dependency_name(engine);
     let import_stmt = format!("import {}", package);
-    let output = Command::new(&env.program)
-        .args(&env.args)
-        .args(["-c", &import_stmt])
+    let mut cmd = Command::new(&env.program);
+    cmd.args(&env.args).args(["-c", &import_stmt]);
+    crate::utils::hide_console(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("检查 Python 依赖失败: {}", e))?;
 
@@ -304,11 +304,13 @@ fn try_write(
 ) -> Result<(), String> {
     let env = find_python3_with_dependency(engine)?;
 
-    let output = Command::new(&env.program)
-        .args(&env.args)
+    let mut cmd = Command::new(&env.program);
+    cmd.args(&env.args)
         .arg(script_path)
         .arg(file_path)
-        .arg(json_path)
+        .arg(json_path);
+    crate::utils::hide_console(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("调用 Python 失败: {}", e))?;
 

@@ -2,6 +2,12 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+fn new_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    crate::utils::hide_console(&mut cmd);
+    cmd
+}
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use encoding_rs::GBK;
@@ -68,7 +74,7 @@ fn decode_command_text(bytes: &[u8]) -> String {
 }
 
 fn git_command(root: &Path) -> Command {
-    let mut command = Command::new("git");
+    let mut command = new_command("git");
     command.arg("-C").arg(root);
     command
 }
@@ -190,12 +196,12 @@ fn parse_svn_info_value(text: &str, key: &str) -> Option<String> {
 
 fn svn_info(path: &Path) -> Result<VcsFileInfo, String> {
     let root = svn_root(path);
-    let mut command = Command::new("svn");
+    let mut command = new_command("svn");
     command.arg("info").arg(path);
     let info_text = command_text(command)?;
 
     let status = {
-        let mut command = Command::new("svn");
+        let mut command = new_command("svn");
         command.arg("status").arg(path);
         command_text(command).ok().map(|s| {
             if s.is_empty() {
@@ -271,7 +277,7 @@ fn parse_svn_log(text: &str) -> Vec<VcsCommitSummary> {
 }
 
 fn svn_log(path: &Path, limit: usize) -> Result<Vec<VcsCommitSummary>, String> {
-    let mut command = Command::new("svn");
+    let mut command = new_command("svn");
     command.arg("log").arg("-l").arg(limit.to_string()).arg(path);
     Ok(parse_svn_log(&command_text(command)?))
 }
@@ -306,7 +312,7 @@ fn find_executable(program: &str, install_dirs: &[&str]) -> Option<PathBuf> {
 fn open_tortoise_git_log(path: &Path) -> Result<(), String> {
     let exe = find_executable("TortoiseGitProc.exe", &["TortoiseGit\\bin"])
         .ok_or_else(|| "未检测到 TortoiseGitProc.exe".to_string())?;
-    Command::new(exe)
+    new_command(&exe.to_string_lossy())
         .arg("/command:log")
         .arg(format!("/path:{}", path.display()))
         .spawn()
@@ -317,7 +323,7 @@ fn open_tortoise_git_log(path: &Path) -> Result<(), String> {
 fn open_tortoise_svn_log(path: &Path) -> Result<(), String> {
     let exe = find_executable("TortoiseProc.exe", &["TortoiseSVN\\bin"])
         .ok_or_else(|| "未检测到 TortoiseSVN TortoiseProc.exe".to_string())?;
-    Command::new(exe)
+    new_command(&exe.to_string_lossy())
         .arg("/command:log")
         .arg(format!("/path:{}", path.display()))
         .spawn()
@@ -453,7 +459,7 @@ pub fn export_vcs_file_revision(path: &str, revision: &str) -> Result<String, St
             output.stdout
         }
         Some(VcsKind::Svn) => {
-            let mut command = Command::new("svn");
+            let mut command = new_command("svn");
             command.arg("cat").arg("-r").arg(revision).arg(target);
             let output = command
                 .output()
@@ -477,7 +483,7 @@ pub fn open_in_file_explorer(path: &str) -> Result<(), String> {
     }
 
     if cfg!(windows) {
-        let mut command = Command::new("explorer");
+        let mut command = new_command("explorer");
         if target.is_file() {
             command.arg(format!("/select,{}", target.display()));
         } else {

@@ -343,6 +343,8 @@ export default function DiffView() {
       setFilter(state.filter);
       setScrollMetrics(state.scrollMetrics);
       setColumnWidths(state.columnWidths);
+      // Ensure the restoring flag is cleared after UI state is restored
+      useDiffStore.setState({ _restoringSnapshot: false });
     });
     return () => {
       offCapture();
@@ -396,6 +398,11 @@ export default function DiffView() {
   // Recompute diff
   useEffect(() => {
     if (!oldSheet || !effectiveNewRows || !keyColumnIndices.length) return;
+    const state = useDiffStore.getState();
+    if (state._restoringSnapshot) {
+      useDiffStore.setState({ _restoringSnapshot: false });
+      return;
+    }
     setDiffResult(computeDiff(oldSheet, { ...newSheet!, rows: effectiveNewRows }, keyColumnIndices));
   }, [oldSheet, effectiveNewRows, keyColumnIndices, newSheet, setDiffResult]);
 
@@ -438,10 +445,11 @@ export default function DiffView() {
   }, [oldWorkbook, newWorkbook, selectedFilePair]);
 
   const loadVcsInfo = useCallback(async (cancelled: () => boolean) => {
-    const oldPath = selectedFilePair?.oldPath ?? null;
-    const newPath = selectedFilePair?.newPath ?? null;
-    const presetOldInfo = selectedFilePair?.oldVcsInfo;
-    const presetNewInfo = selectedFilePair?.newVcsInfo;
+    const pair = useDiffStore.getState().selectedFilePair;
+    const oldPath = pair?.oldPath ?? null;
+    const newPath = pair?.newPath ?? null;
+    const presetOldInfo = pair?.oldVcsInfo;
+    const presetNewInfo = pair?.newVcsInfo;
     setLeftVcsInfo(presetOldInfo ?? (oldPath ? null : { kind: "none", path: "" }));
     setRightVcsInfo(presetNewInfo ?? (newPath ? null : { kind: "none", path: "" }));
 
@@ -450,9 +458,27 @@ export default function DiffView() {
       presetNewInfo ? Promise.resolve(presetNewInfo) : newPath ? getVcsFileInfo(newPath) : Promise.resolve(null),
     ]);
     if (cancelled()) return;
-    if (leftResult.status === "fulfilled") setLeftVcsInfo(leftResult.value);
-    if (rightResult.status === "fulfilled") setRightVcsInfo(rightResult.value);
-  }, [selectedFilePair?.newPath, selectedFilePair?.newVcsInfo, selectedFilePair?.oldPath, selectedFilePair?.oldVcsInfo]);
+    if (leftResult.status === "fulfilled") {
+      setLeftVcsInfo(leftResult.value);
+      const currentPair = useDiffStore.getState().selectedFilePair;
+      if (currentPair && currentPair.oldPath === oldPath) {
+        useDiffStore.getState().selectFilePair({
+          ...currentPair,
+          oldVcsInfo: leftResult.value ?? undefined,
+        });
+      }
+    }
+    if (rightResult.status === "fulfilled") {
+      setRightVcsInfo(rightResult.value);
+      const currentPair = useDiffStore.getState().selectedFilePair;
+      if (currentPair && currentPair.newPath === newPath) {
+        useDiffStore.getState().selectFilePair({
+          ...currentPair,
+          newVcsInfo: rightResult.value ?? undefined,
+        });
+      }
+    }
+  }, [selectedFilePair?.oldPath, selectedFilePair?.newPath]);
 
   useEffect(() => {
     let cancelled = false;
@@ -461,6 +487,14 @@ export default function DiffView() {
   }, [loadVcsInfo]);
 
   const refreshVcsInfo = useCallback(async () => {
+    const pair = useDiffStore.getState().selectedFilePair;
+    if (pair) {
+      useDiffStore.getState().selectFilePair({
+        ...pair,
+        oldVcsInfo: undefined,
+        newVcsInfo: undefined,
+      });
+    }
     await loadVcsInfo(() => false);
   }, [loadVcsInfo]);
 

@@ -3,6 +3,7 @@
 mod commands;
 mod excel;
 mod models;
+mod utils;
 mod vcs;
 
 fn main() {

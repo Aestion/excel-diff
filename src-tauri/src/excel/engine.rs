@@ -24,8 +24,10 @@ fn detect() -> ExcelEngine {
     }
 
     // Probe 1: can we import xlwings?
-    let ok_xlwings = Command::new("python")
-        .args(["-c", "import xlwings"])
+    let mut cmd = Command::new("python");
+    cmd.args(["-c", "import xlwings"]);
+    crate::utils::hide_console(&mut cmd);
+    let ok_xlwings = cmd
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
@@ -35,11 +37,13 @@ fn detect() -> ExcelEngine {
     }
 
     // Probe 2: is Excel COM registered in Windows registry?
-    let ok_com = Command::new("python")
-        .args([
-            "-c",
-            r"import winreg; winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r'Excel.Application\CLSID')",
-        ])
+    let mut cmd = Command::new("python");
+    cmd.args([
+        "-c",
+        r"import winreg; winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r'Excel.Application\CLSID')",
+    ]);
+    crate::utils::hide_console(&mut cmd);
+    let ok_com = cmd
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
