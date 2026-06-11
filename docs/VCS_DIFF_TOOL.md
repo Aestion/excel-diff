@@ -33,9 +33,11 @@ The script:
 - configures Git difftool `ExcelDiff`
 - configures `git exceldiff`
 - configures SVN CLI `diff-cmd`
-- configures TortoiseSVN DiffTools for `.xls`, `.xlsx`, `.xlsm`, `.xlsb`, `.csv`, and `.tsv`
+- configures TortoiseSVN DiffTools for Excel/CSV extensions and common Excel MIME types
+- suppresses the extra TortoiseMerge window for `svn:mime-type` property-only diffs
 - writes a backup to `%APPDATA%\ExcelDiff\vcs-config-backup.json`
 - writes the previous SVN config file to `%APPDATA%\ExcelDiff\svn-config.bak`
+- writes SVN/Git wrapper logs to `%APPDATA%\ExcelDiff\logs\vcs-diff.log`
 
 Restore the previous configuration:
 
@@ -111,15 +113,21 @@ svn diff -r 123:124 path/to/file.xlsx
 
 ## TortoiseSVN
 
-The configuration script writes per-extension values under `HKCU\Software\TortoiseSVN\DiffTools`. The Windows Explorer menu still shows TortoiseSVN's normal `Diff` / `Diff with previous version` entries; those entries launch Excel Diff for configured Excel/CSV file extensions.
+The configuration script writes per-extension and per-MIME-type values under `HKCU\Software\TortoiseSVN\DiffTools`. The Windows Explorer menu still shows TortoiseSVN's normal `Diff` / `Diff with previous version` entries; those entries launch Excel Diff for configured Excel/CSV file extensions and common Excel MIME types.
+
+TortoiseSVN only shows the direct `Diff` menu item for files with local working-copy changes. Clean files normally show options such as `Diff with previous version`, `Show log`, or `Diff later`; that menu difference is controlled by TortoiseSVN file status.
 
 Configured command:
 
 ```text
-"C:\Program Files\Excel Diff\ExcelDiff.exe" diff -s %base -d %mine --title %bname
+"C:\Program Files\Excel Diff\ExcelDiff.exe" diff -s "%base" -d "%mine" --title "%bname"
 ```
 
 Manual configuration path: TortoiseSVN -> Settings -> External Programs -> Diff Viewer -> Advanced. Add the same command for `.xlsx`, `.xlsm`, `.xlsb`, and `.xls`.
+
+Some repositories store Excel files with `svn:mime-type=application/octet-stream`. For those files, add the same command for `application/octet-stream` as well. The script does this automatically.
+
+When comparing from the log window, TortoiseSVN may also try to show versioned property changes such as `svn:mime-type`. The script maps `svn:mime-type` to a no-op wrapper so the content comparison opens in Excel Diff without an extra TortoiseMerge property window.
 
 If your TortoiseSVN dialog uses a different variable set, configure it with the two file path variables it provides for base/working or old/new files. Excel Diff accepts both named and positional arguments, so this also works:
 

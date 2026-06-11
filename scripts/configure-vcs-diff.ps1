@@ -203,21 +203,140 @@ New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
 
 $gitWrapper = Join-Path $toolDir "excel-diff-git.cmd"
 $svnWrapper = Join-Path $toolDir "excel-diff-svn.cmd"
+$tortoiseWrapper = Join-Path $toolDir "excel-diff-tortoise.js"
+$noopWrapper = Join-Path $toolDir "excel-diff-noop.js"
 
 Set-Content -LiteralPath $gitWrapper -Encoding ASCII -Value @"
 @echo off
-"$exe" diff -s "%~1" -d "%~2" --title "%~3"
+setlocal
+set "EXE=$exe"
+set "LEFT=%~1"
+set "RIGHT=%~2"
+set "TITLE=%~3"
+set "LOGDIR=%APPDATA%\ExcelDiff\logs"
+if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>nul
+if not exist "%LEFT%" (
+  echo Missing left file: "%LEFT%" >> "%LOGDIR%\vcs-diff.log"
+  exit /b 2
+)
+if not exist "%RIGHT%" (
+  echo Missing right file: "%RIGHT%" >> "%LOGDIR%\vcs-diff.log"
+  exit /b 2
+)
+set "COPYDIR=%TEMP%\ExcelDiff\vcs-diff\%RANDOM%-%RANDOM%-%RANDOM%"
+mkdir "%COPYDIR%" >nul 2>nul
+for %%I in ("%LEFT%") do set "LEFT_COPY=%COPYDIR%\left%%~xI"
+for %%I in ("%RIGHT%") do set "RIGHT_COPY=%COPYDIR%\right%%~xI"
+copy /Y "%LEFT%" "%LEFT_COPY%" >nul || exit /b 3
+copy /Y "%RIGHT%" "%RIGHT_COPY%" >nul || exit /b 4
+echo [%DATE% %TIME%] Git diff "%LEFT%" "%RIGHT%" ^> "%LEFT_COPY%" "%RIGHT_COPY%" >> "%LOGDIR%\vcs-diff.log"
+start "" "%EXE%" diff -s "%LEFT_COPY%" -d "%RIGHT_COPY%" --title "%TITLE%"
+"@
+
+Set-Content -LiteralPath $noopWrapper -Encoding ASCII -Value @"
+WScript.Quit(0);
 "@
 
 Set-Content -LiteralPath $svnWrapper -Encoding ASCII -Value @"
 @echo off
-set LEFT=%~6
-set RIGHT=%~7
+setlocal
+set "EXE=$exe"
+set "LEFT=%~6"
+set "RIGHT=%~7"
+set "TITLE=%~3"
 if "%RIGHT%"=="" (
-  set LEFT=%~1
-  set RIGHT=%~2
+  set "LEFT=%~1"
+  set "RIGHT=%~2"
 )
-"$exe" diff -s "%LEFT%" -d "%RIGHT%" --title "%~3"
+if "%TITLE%"=="" set "TITLE=%~n2"
+set "LOGDIR=%APPDATA%\ExcelDiff\logs"
+if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>nul
+if not exist "%LEFT%" (
+  echo Missing left file: "%LEFT%" args=%* >> "%LOGDIR%\vcs-diff.log"
+  exit /b 2
+)
+if not exist "%RIGHT%" (
+  echo Missing right file: "%RIGHT%" args=%* >> "%LOGDIR%\vcs-diff.log"
+  exit /b 2
+)
+set "COPYDIR=%TEMP%\ExcelDiff\vcs-diff\%RANDOM%-%RANDOM%-%RANDOM%"
+mkdir "%COPYDIR%" >nul 2>nul
+for %%I in ("%LEFT%") do set "LEFT_COPY=%COPYDIR%\left%%~xI"
+for %%I in ("%RIGHT%") do set "RIGHT_COPY=%COPYDIR%\right%%~xI"
+copy /Y "%LEFT%" "%LEFT_COPY%" >nul || exit /b 3
+copy /Y "%RIGHT%" "%RIGHT_COPY%" >nul || exit /b 4
+echo [%DATE% %TIME%] SVN diff "%LEFT%" "%RIGHT%" ^> "%LEFT_COPY%" "%RIGHT_COPY%" >> "%LOGDIR%\vcs-diff.log"
+start "" "%EXE%" diff -s "%LEFT_COPY%" -d "%RIGHT_COPY%" --title "%TITLE%"
+"@
+
+$jsExe = $exe.Replace("\", "\\").Replace('"', '\"')
+Set-Content -LiteralPath $tortoiseWrapper -Encoding ASCII -Value @"
+var fso = new ActiveXObject("Scripting.FileSystemObject");
+var shell = new ActiveXObject("WScript.Shell");
+var exe = "$jsExe";
+var args = WScript.Arguments;
+var left = args.length > 0 ? String(args.Item(0)) : "";
+var right = args.length > 1 ? String(args.Item(1)) : "";
+var title = args.length > 2 ? String(args.Item(2)) : "";
+var appData = shell.ExpandEnvironmentStrings("%APPDATA%");
+var temp = shell.ExpandEnvironmentStrings("%TEMP%");
+var logDir = fso.BuildPath(appData, "ExcelDiff\\logs");
+var rootDir = fso.BuildPath(temp, "ExcelDiff\\vcs-diff");
+
+function ensureFolder(path) {
+  if (!fso.FolderExists(path)) {
+    ensureFolder(fso.GetParentFolderName(path));
+    fso.CreateFolder(path);
+  }
+}
+
+function quote(value) {
+  return '"' + String(value).replace(/"/g, '""') + '"';
+}
+
+function extension(path) {
+  var name = fso.GetFileName(path);
+  var index = name.lastIndexOf(".");
+  return index >= 0 ? name.substring(index) : "";
+}
+
+function log(message) {
+  try {
+    ensureFolder(logDir);
+    var file = fso.OpenTextFile(fso.BuildPath(logDir, "vcs-diff.log"), 8, true);
+    file.WriteLine(new Date().toISOString() + " " + message);
+    file.Close();
+  } catch (e) {}
+}
+
+try {
+  ensureFolder(rootDir);
+  if (!fso.FileExists(left)) {
+    log("TortoiseSVN missing left: " + left + " args=" + WScript.Arguments.length);
+    WScript.Quit(2);
+  }
+  if (!fso.FileExists(right)) {
+    log("TortoiseSVN missing right: " + right + " args=" + WScript.Arguments.length);
+    WScript.Quit(2);
+  }
+
+  var copyDir = fso.BuildPath(rootDir, String(new Date().getTime()) + "-" + Math.floor(Math.random() * 1000000000));
+  fso.CreateFolder(copyDir);
+  var leftCopy = fso.BuildPath(copyDir, "left" + extension(left));
+  var rightCopy = fso.BuildPath(copyDir, "right" + extension(right));
+  fso.CopyFile(left, leftCopy, true);
+  fso.CopyFile(right, rightCopy, true);
+  if (!title) {
+    title = fso.GetFileName(right) || fso.GetFileName(left);
+  }
+
+  var command = quote(exe) + " diff -s " + quote(leftCopy) + " -d " + quote(rightCopy) + " --title " + quote(title);
+  log("TortoiseSVN diff " + left + " " + right + " -> " + leftCopy + " " + rightCopy + " cmd=" + command);
+  shell.Run(command, 1, false);
+} catch (e) {
+  log("TortoiseSVN wrapper error: " + e.message);
+  WScript.Quit(5);
+}
 "@
 
 $backup = [ordered]@{
@@ -266,7 +385,21 @@ if (!$SkipSvn -and $null -eq $backup.svn) {
 }
 
 if (!$SkipTortoiseSvn -and $null -eq $backup.tortoiseSvn) {
-  $extensions = @(".xls", ".xlsx", ".xlsm", ".xlsb", ".csv", ".tsv")
+  $extensions = @(
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+    ".csv",
+    ".tsv",
+    "application/octet-stream",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel.sheet.macroEnabled.12",
+    "text/csv",
+    "text/tab-separated-values",
+    "svn:mime-type"
+  )
   $values = [ordered]@{}
   foreach ($extension in $extensions) {
     $values[$extension] = Get-TortoiseDiffToolValue $extension
@@ -294,10 +427,24 @@ if (!$SkipSvn) {
 }
 
 if (!$SkipTortoiseSvn) {
-  $tortoiseCommand = "`"$exe`" diff -s %base -d %mine --title %bname"
-  foreach ($extension in @(".xls", ".xlsx", ".xlsm", ".xlsb", ".csv", ".tsv")) {
+  $tortoiseCommand = "wscript.exe `"$tortoiseWrapper`" `"%base`" `"%mine`" `"%bname`""
+  foreach ($extension in @(
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+    ".csv",
+    ".tsv",
+    "application/octet-stream",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel.sheet.macroEnabled.12",
+    "text/csv",
+    "text/tab-separated-values"
+  )) {
     Set-TortoiseDiffToolValue $extension $tortoiseCommand
   }
+  Set-TortoiseDiffToolValue "svn:mime-type" "wscript.exe `"$noopWrapper`""
 }
 
 Write-Host "Excel Diff VCS integration configured."
@@ -310,5 +457,5 @@ if (!$SkipSvn) {
   Write-Host "SVN CLI diff-cmd configured via $svnWrapper"
 }
 if (!$SkipTortoiseSvn) {
-  Write-Host "TortoiseSVN DiffTools configured for .xls/.xlsx/.xlsm/.xlsb/.csv/.tsv"
+  Write-Host "TortoiseSVN DiffTools configured for Excel/CSV extensions and MIME types"
 }

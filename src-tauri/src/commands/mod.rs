@@ -4,7 +4,7 @@ use crate::vcs;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use tauri::command;
 
 #[derive(serde::Serialize)]
@@ -110,41 +110,6 @@ pub fn parse_external_diff_args(args: &[String], cwd: Option<&str>) -> Option<Ex
         destination_path: normalize_external_diff_path(&destination_path, cwd),
         title,
         fallback_cmd,
-    })
-}
-
-fn copy_external_diff_file(path: &str, dir: &Path, name: &str) -> Result<String, String> {
-    let source = Path::new(path);
-    let extension = source
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| format!(".{}", value))
-        .unwrap_or_default();
-    let target = dir.join(format!("{}{}", name, extension));
-    fs::copy(source, &target)
-        .map_err(|e| format!("Failed to copy external diff file '{}': {}", path, e))?;
-    Ok(target.to_string_lossy().to_string())
-}
-
-pub fn materialize_external_diff_request(
-    request: &ExternalDiffRequest,
-) -> Result<ExternalDiffRequest, String> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir()
-        .join("excel-diff")
-        .join("external-diff")
-        .join(timestamp.to_string());
-    fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create external diff temp dir '{}': {}", dir.display(), e))?;
-
-    Ok(ExternalDiffRequest {
-        source_path: copy_external_diff_file(&request.source_path, &dir, "source")?,
-        destination_path: copy_external_diff_file(&request.destination_path, &dir, "destination")?,
-        title: request.title.clone(),
-        fallback_cmd: request.fallback_cmd.clone(),
     })
 }
 
