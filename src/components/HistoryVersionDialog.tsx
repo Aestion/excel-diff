@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getVcsFileInfo, getVcsFileLog, openVcsLog } from "../api/tauri";
 import type { VcsCommitSummary, VcsFileInfo } from "../types/vcs";
 
@@ -26,12 +26,73 @@ interface HistoryVersionDialogProps {
   onSelect: (revision: string, commit?: VcsCommitSummary, currentInfo?: VcsFileInfo | null) => void;
 }
 
+function CommitMessage({ message, expanded, onToggle }: {
+  message: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const messageRef = useRef<HTMLDivElement>(null);
+  const [canExpand, setCanExpand] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = messageRef.current;
+    if (!el) return;
+    if (expanded) {
+      setCanExpand(true);
+      return;
+    }
+    setCanExpand(el.scrollHeight > el.clientHeight + 1);
+  }, [expanded, message]);
+
+  return (
+    <div className="mt-1 flex items-start gap-2">
+      <div
+        ref={messageRef}
+        className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-5 text-gray-700"
+        style={expanded ? undefined : {
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}
+      >
+        {message}
+      </div>
+      {canExpand && (
+        <button
+          type="button"
+          className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-blue-600 hover:bg-blue-100"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggle();
+          }}
+        >
+          {expanded ? "收起" : "展开"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function HistoryVersionDialog({ path, onClose, onSelect }: HistoryVersionDialogProps) {
   const [logs, setLogs] = useState<VcsCommitSummary[]>([]);
   const [currentInfo, setCurrentInfo] = useState<VcsFileInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedRevision, setSelectedRevision] = useState<string | null>(null);
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(() => new Set());
+
+  const toggleExpanded = (key: string) => {
+    setExpandedItems((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +101,7 @@ export default function HistoryVersionDialog({ path, onClose, onSelect }: Histor
     setLogs([]);
     setCurrentInfo(null);
     setSelectedRevision(null);
+    setExpandedItems(new Set());
 
     Promise.all([
       getVcsFileLog(path, LOG_LIMIT),
@@ -110,10 +172,14 @@ export default function HistoryVersionDialog({ path, onClose, onSelect }: Histor
               {logs.map((item) => {
                 const active = item.id === selectedRevision;
                 const isCurrent = sameRevision(item.id, currentRevision);
+                const itemKey = `${item.id}-${item.date ?? ""}`;
+                const message = item.message || "(无提交说明)";
+                const expanded = expandedItems.has(itemKey);
                 return (
-                  <button
-                    type="button"
-                    key={`${item.id}-${item.date ?? ""}`}
+                  <div
+                    key={itemKey}
+                    role="button"
+                    tabIndex={0}
                     className={`w-full rounded border px-3 py-2 text-left text-xs shadow-sm ${
                       active
                         ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
@@ -121,6 +187,12 @@ export default function HistoryVersionDialog({ path, onClose, onSelect }: Histor
                     }`}
                     onClick={() => setSelectedRevision(item.id)}
                     onDoubleClick={() => onSelect(item.id, item, currentInfo)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedRevision(item.id);
+                      }
+                    }}
                   >
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="font-mono font-semibold text-blue-700">{shortRevision(item.id)}</span>
@@ -128,10 +200,12 @@ export default function HistoryVersionDialog({ path, onClose, onSelect }: Histor
                       <span className="rounded bg-gray-100 px-1.5 font-semibold text-gray-700">{item.author ?? "-"}</span>
                       <span className="rounded bg-emerald-50 px-1.5 font-semibold text-emerald-700">{formatDate(item.date)}</span>
                     </div>
-                    <div className="mt-1 whitespace-pre-wrap break-words text-gray-700">
-                      {item.message || "(无提交说明)"}
-                    </div>
-                  </button>
+                    <CommitMessage
+                      message={message}
+                      expanded={expanded}
+                      onToggle={() => toggleExpanded(itemKey)}
+                    />
+                  </div>
                 );
               })}
             </div>

@@ -315,11 +315,14 @@ export function computeDiff(
   const stats = {
     totalOld: oldSheet.rows.length - 1,
     totalNew: newSheet.rows.length - 1,
-    unchanged: diffRows.filter((r) => r.status === "unchanged").length,
-    added: diffRows.filter((r) => r.status === "added").length,
-    deleted: diffRows.filter((r) => r.status === "deleted").length,
-    modified: diffRows.filter((r) => r.status === "modified").length,
+    unchanged: 0,
+    added: 0,
+    deleted: 0,
+    modified: 0,
   };
+  for (const row of diffRows) {
+    stats[row.status]++;
+  }
 
   return { keyColumnIndices, diffRows, duplicateKeys, stats };
 }

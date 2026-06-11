@@ -99,6 +99,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
     const { oldFiles, newFiles, oldDir, newDir, filePairs: existingPairs } = get();
     const oldMap = new Map(oldFiles.map((f) => [f.relativePath, f]));
     const newMap = new Map(newFiles.map((f) => [f.relativePath, f]));
+    const existingMap = new Map(existingPairs.map((p) => [p.relativePath, p]));
     const allPaths = new Set([...oldMap.keys(), ...newMap.keys()]);
 
     // Build pairs with INSTANT size-based comparison (no Python reads)
@@ -109,7 +110,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
         const newFile = newMap.get(relPath);
 
         // Check if we already have a result for this file
-        const existing = existingPairs.find(p => p.relativePath === relPath);
+        const existing = existingMap.get(relPath);
         const metadataChanged = existing && oldFile && newFile
           && (existing.oldSize !== oldFile.sizeBytes
             || existing.newSize !== newFile.sizeBytes

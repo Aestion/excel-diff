@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef, type CSSProperties } from "react";
 import { useDiffStore } from "../stores/diffStore";
-import { readExcel, detectKeyColumns, copyExcelFile, listExcelFiles, openVcsLog, openInFileExplorer, exportVcsFileRevision, cleanupOldVcsTempExports } from "../api/tauri";
+import { readExcel, copyExcelFile, listExcelFiles, openVcsLog, openInFileExplorer, exportVcsFileRevision, cleanupOldVcsTempExports } from "../api/tauri";
 import { computeDiff } from "../utils/diffEngine";
+import { detectSemanticKeyColumns } from "../utils/workbookCompare";
 import type { FilePair } from "../types/excel";
 import { RefreshIcon, ArrowRight, ArrowLeft, SpinnerIcon, FolderIcon, ChevronDown } from "./Icons";
 import VersionCompareDialog from "./VersionCompareDialog";
@@ -48,6 +49,14 @@ interface FileTreeNode {
   differentFiles: number;
   onlySideFiles: number;
 }
+
+type VisibleTreeRow =
+  | { kind: "folder"; key: string; node: FileTreeNode; level: number; collapsed: boolean }
+  | { kind: "file"; key: string; pair: FilePair; level: number };
+
+const FILE_TREE_ROW_HEIGHT = 28;
+const FILE_TREE_HEADER_HEIGHT = 48;
+const FILE_TREE_OVERSCAN = 12;
 
 function splitRelativePath(path: string): string[] {
   return path.split(/[\\/]+/).filter(Boolean);
@@ -400,6 +409,8 @@ export default function FileList() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [versionCompareTarget, setVersionCompareTarget] = useState<VersionCompareTarget | null>(null);
   const [historyCompareTarget, setHistoryCompareTarget] = useState<HistoryCompareTarget | null>(null);
+  const [treeScrollTop, setTreeScrollTop] = useState(0);
+  const [treeViewportHeight, setTreeViewportHeight] = useState(600);
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const syncingScrollRef = useRef(false);
@@ -433,14 +444,24 @@ export default function FileList() {
   }, [allFolders, fileListKnownFolders, setFileListCollapsedFolders, setFileListKnownFolders]);
 
   // Stats
-  const stats = useMemo(() => ({
-    total: filePairs.length,
-    identical: filePairs.filter(p => p.diffStatus === "identical").length,
-    different: filePairs.filter(p => p.diffStatus === "different").length,
-    unknown: filePairs.filter(p => p.diffStatus === "unknown").length,
-    oldOnly: filePairs.filter(p => p.status === "old-only").length,
-    newOnly: filePairs.filter(p => p.status === "new-only").length,
-  }), [filePairs]);
+  const stats = useMemo(() => {
+    const next = {
+      total: filePairs.length,
+      identical: 0,
+      different: 0,
+      unknown: 0,
+      oldOnly: 0,
+      newOnly: 0,
+    };
+    for (const pair of filePairs) {
+      if (pair.diffStatus === "identical") next.identical++;
+      if (pair.diffStatus === "different") next.different++;
+      if (pair.diffStatus === "unknown") next.unknown++;
+      if (pair.status === "old-only") next.oldOnly++;
+      if (pair.status === "new-only") next.newOnly++;
+    }
+    return next;
+  }, [filePairs]);
 
   // Filtered
   const filteredPairs = useMemo(() => {
@@ -464,6 +485,9 @@ export default function FileList() {
 
   // Single unified tree includes old-only, new-only, and matched files.
   const fileTree = useMemo(() => buildFileTree(filteredPairs), [filteredPairs]);
+  const visibleTreeRows = useMemo(() => (
+    flattenVisibleTreeRows(fileTree, fileListCollapsedFolders)
+  ), [fileTree, fileListCollapsedFolders]);
 
   // Refresh
   const handleRefresh = useCallback(async () => {
@@ -519,11 +543,11 @@ export default function FileList() {
       const sheetName = commonSheets[0] || oldWb.sheetNames[0] || "";
       setCurrentSheet(sheetName);
       if (sheetName) {
-        const keyCols = await detectKeyColumns(pair.newPath!, sheetName);
-        setKeyColumnIndices(keyCols);
         const os = oldWb.sheets.find(s => s.name === sheetName);
         const ns = newWb.sheets.find(s => s.name === sheetName);
         if (os && ns) {
+          const keyCols = detectSemanticKeyColumns(ns);
+          setKeyColumnIndices(keyCols);
           const result = computeDiff(os, ns, keyCols);
           setDiffResult(result);
           const hasDiff = result.stats.added > 0 || result.stats.deleted > 0 || result.stats.modified > 0;
@@ -580,6 +604,8 @@ export default function FileList() {
     if (!sourceEl || !targetEl) return;
 
     setFileListScrollTop(sourceEl.scrollTop);
+    setTreeScrollTop(sourceEl.scrollTop);
+    setTreeViewportHeight(sourceEl.clientHeight);
     syncingScrollRef.current = true;
     targetEl.scrollTop = sourceEl.scrollTop;
     requestAnimationFrame(() => {
@@ -597,10 +623,23 @@ export default function FileList() {
     syncingScrollRef.current = true;
     leftEl.scrollTop = fileListScrollTop;
     rightEl.scrollTop = fileListScrollTop;
+    setTreeScrollTop(fileListScrollTop);
+    setTreeViewportHeight(Math.max(leftEl.clientHeight, rightEl.clientHeight));
     requestAnimationFrame(() => {
       syncingScrollRef.current = false;
     });
   }, [fileListScrollTop, fileTree]);
+
+  useEffect(() => {
+    const updateViewportHeight = () => {
+      const leftHeight = leftPanelRef.current?.clientHeight ?? 0;
+      const rightHeight = rightPanelRef.current?.clientHeight ?? 0;
+      setTreeViewportHeight(Math.max(leftHeight, rightHeight, 600));
+    };
+    updateViewportHeight();
+    window.addEventListener("resize", updateViewportHeight);
+    return () => window.removeEventListener("resize", updateViewportHeight);
+  }, []);
 
   // Refs for latest values (avoid stale closures in keyboard handler)
   const handleRefreshRef = useRef(handleRefresh);
@@ -694,11 +733,13 @@ export default function FileList() {
         compareNote: `Left side is read-only history revision ${trimmedRevision}`,
       });
       if (sheetName) {
-        const keyCols = await detectKeyColumns(currentPath, sheetName);
-        setKeyColumnIndices(keyCols);
         const os = historyWb.sheets.find(s => s.name === sheetName);
         const ns = currentWb.sheets.find(s => s.name === sheetName);
-        if (os && ns) setDiffResult(computeDiff(os, ns, keyCols));
+        if (os && ns) {
+          const keyCols = detectSemanticKeyColumns(ns);
+          setKeyColumnIndices(keyCols);
+          setDiffResult(computeDiff(os, ns, keyCols));
+        }
       }
       openDiffTab({
         parentTabId: activeFileListTabId,
@@ -834,7 +875,7 @@ export default function FileList() {
         })();
       }, 0);
     }
-  }, [contextMenu, detectKeyColumns, filePairs, handleOpen, selectFilePair, setCurrentSheet, setDiffResult, setKeyColumnIndices, setNewWorkbook, setOldWorkbook, setView]);
+  }, [contextMenu, filePairs, handleOpen, selectFilePair, setCurrentSheet, setDiffResult, setKeyColumnIndices, setNewWorkbook, setOldWorkbook, setView]);
 
   // Keyboard — register once, read latest values via refs
   useEffect(() => {
@@ -933,10 +974,11 @@ export default function FileList() {
             <span className="w-20 text-right">修改时间</span>
             <span className="w-16 text-right ml-2">大小</span>
           </div>
-          <TreeFolderNode node={fileTree} side="left" level={0}
+          <VirtualTreeRows rows={visibleTreeRows} side="left"
             selected={selectedPaths} onSelect={handleSelect}
             onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
-            collapsedFolders={fileListCollapsedFolders} onToggle={toggleFolder} />
+            onToggle={toggleFolder}
+            scrollTop={treeScrollTop} viewportHeight={treeViewportHeight} />
         </div>
 
         {/* Right */}
@@ -952,10 +994,11 @@ export default function FileList() {
             <span className="w-20 text-right">修改时间</span>
             <span className="w-16 text-right ml-2">大小</span>
           </div>
-          <TreeFolderNode node={fileTree} side="right" level={0}
+          <VirtualTreeRows rows={visibleTreeRows} side="right"
             selected={selectedPaths} onSelect={handleSelect}
             onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
-            collapsedFolders={fileListCollapsedFolders} onToggle={toggleFolder} />
+            onToggle={toggleFolder}
+            scrollTop={treeScrollTop} viewportHeight={treeViewportHeight} />
         </div>
       </div>
 
@@ -1007,6 +1050,135 @@ export default function FileList() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function flattenVisibleTreeRows(node: FileTreeNode, collapsedFolders: Set<string>, level = 0): VisibleTreeRow[] {
+  const rows: VisibleTreeRow[] = [];
+  const isRoot = node.path === "";
+  const collapsed = !isRoot && collapsedFolders.has(node.path);
+  if (!isRoot) {
+    rows.push({ kind: "folder", key: `folder:${node.path}`, node, level, collapsed });
+  }
+  if (!collapsed || isRoot) {
+    for (const child of node.children) {
+      rows.push(...flattenVisibleTreeRows(child, collapsedFolders, isRoot ? level : level + 1));
+    }
+    for (const pair of node.files) {
+      rows.push({ kind: "file", key: `file:${pair.relativePath}`, pair, level: isRoot ? level : level + 1 });
+    }
+  }
+  return rows;
+}
+
+function VirtualTreeRows({ rows, side, selected, onSelect, onDoubleClick, onContextMenu, onToggle, scrollTop, viewportHeight }: {
+  rows: VisibleTreeRow[];
+  side: "left" | "right";
+  selected: Set<string>;
+  onSelect: (path: string, e: React.MouseEvent) => void;
+  onDoubleClick: (pair: FilePair) => void;
+  onContextMenu: (e: React.MouseEvent, side: "left" | "right", path: string, kind: "file" | "folder") => void;
+  onToggle: (dir: string) => void;
+  scrollTop: number;
+  viewportHeight: number;
+}) {
+  const adjustedScrollTop = Math.max(0, scrollTop - FILE_TREE_HEADER_HEIGHT);
+  const startIndex = Math.max(0, Math.floor(adjustedScrollTop / FILE_TREE_ROW_HEIGHT) - FILE_TREE_OVERSCAN);
+  const visibleCount = Math.ceil(Math.max(viewportHeight, FILE_TREE_ROW_HEIGHT) / FILE_TREE_ROW_HEIGHT) + FILE_TREE_OVERSCAN * 2;
+  const endIndex = Math.min(rows.length, startIndex + visibleCount);
+  const visibleRows = rows.slice(startIndex, endIndex);
+
+  return (
+    <div className="relative" style={{ height: rows.length * FILE_TREE_ROW_HEIGHT }}>
+      {visibleRows.map((row, offset) => {
+        const index = startIndex + offset;
+        const style: CSSProperties = {
+          position: "absolute",
+          top: index * FILE_TREE_ROW_HEIGHT,
+          left: 0,
+          right: 0,
+        };
+
+        if (row.kind === "folder") {
+          const paddingLeft = 8 + row.level * 16;
+          return (
+            <div
+              key={row.key}
+              className="flex items-center pr-2 h-7 bg-gray-50 border-b cursor-pointer hover:bg-gray-100 select-none"
+              style={{ ...style, paddingLeft }}
+              onClick={() => onToggle(row.node.path)}
+              onContextMenu={(e) => onContextMenu(e, side, row.node.path, "folder")}
+            >
+              <span className={`transform transition-transform ${row.collapsed ? "" : "rotate-90"}`}>
+                <ChevronDown size={12} className="text-gray-400" />
+              </span>
+              <FolderIcon size={13} className="text-amber-500 mx-1" />
+              <span className="text-xs font-medium text-gray-600 flex-1 truncate">{row.node.name}</span>
+              <span className="text-[10px] text-gray-400 ml-2">
+                {row.node.totalFiles}文件
+                {row.node.differentFiles > 0 && <span className="text-red-500 ml-1">{row.node.differentFiles}不同</span>}
+                {row.node.onlySideFiles > 0 && <span className="text-gray-500 ml-1">{row.node.onlySideFiles}仅一侧</span>}
+              </span>
+            </div>
+          );
+        }
+
+        const pair = row.pair;
+        const existsOnThisSide = side === "left"
+          ? pair.status !== "new-only"
+          : pair.status !== "old-only";
+        const paddingLeft = 8 + row.level * 16;
+
+        if (!existsOnThisSide) {
+          return (
+            <div
+              key={row.key}
+              className="flex items-center pr-4 h-7 border-b bg-gray-100 text-xs"
+              style={{ ...style, paddingLeft }}
+            >
+              <span className="w-3 mr-1"></span>
+              <span className="flex-1 font-mono truncate text-gray-300">{pair.filename}</span>
+              <span className="w-20 ml-2 shrink-0"></span>
+              <span className="w-16 ml-2 shrink-0"></span>
+            </div>
+          );
+        }
+
+        const isSelected = selected.has(pair.relativePath);
+        const isOnly = pair.status === "old-only" || pair.status === "new-only";
+        const isDiff = pair.diffStatus === "different";
+        const isUnknown = pair.diffStatus === "unknown" && pair.status === "matched";
+        const bg = isSelected
+          ? "bg-blue-100"
+          : isOnly
+            ? "bg-gray-200"
+            : isDiff
+              ? "bg-red-50"
+              : isUnknown
+                ? "bg-yellow-50"
+                : "bg-white";
+        const modifiedAt = side === "left" ? pair.oldModifiedAt : pair.newModifiedAt;
+        const size = side === "left" ? pair.oldSize : pair.newSize;
+
+        return (
+          <div
+            key={row.key}
+            className={`flex items-center pr-4 h-7 border-b cursor-pointer text-xs ${bg} hover:brightness-95`}
+            style={{ ...style, paddingLeft }}
+            onClick={(e) => onSelect(pair.relativePath, e)}
+            onDoubleClick={() => onDoubleClick(pair)}
+            onContextMenu={(e) => onContextMenu(e, side, pair.relativePath, "file")}
+          >
+            <span className="w-3 mr-1">
+              {isSelected && <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-600" />}
+            </span>
+            <span className="flex-1 font-mono truncate">{pair.filename}</span>
+            <span className="text-gray-400 ml-2 w-20 text-right shrink-0 font-mono">{formatModifiedAt(modifiedAt)}</span>
+            <span className="text-gray-400 ml-2 w-16 text-right shrink-0">{formatSize(size)}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
