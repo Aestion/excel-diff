@@ -1,6 +1,6 @@
 import { forwardRef, memo, useMemo, useCallback, useRef, useEffect, useImperativeHandle } from "react";
 import { AgGridReact } from "ag-grid-react";
-import type { ColDef, RowClassParams, CellValueChangedEvent, CellContextMenuEvent } from "ag-grid-community";
+import type { ColDef, CellValueChangedEvent, CellContextMenuEvent } from "ag-grid-community";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-alpine.css";
 import type { CellValue, ColumnInfo } from "../types/excel";
@@ -207,16 +207,17 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
     });
   }, [diffResult, side, filter]);
 
-  const getRowClass = useCallback((params: RowClassParams<any>) => {
-    const duplicateClass = params.data?._hasDuplicateKey ? " row-duplicate-key" : "";
-    const activeClass = params.data?._rowRef === activeRowRef ? " row-active-diff" : "";
-    switch (params.data?._status) {
-      case "added":    return `row-added${duplicateClass}${activeClass}`;
-      case "deleted":  return `row-deleted${duplicateClass}${activeClass}`;
-      case "modified": return `row-modified${duplicateClass}${activeClass}`;
-      default:         return `${duplicateClass}${activeClass}`.trim();
-    }
-  }, [activeRowRef]);
+  const rowClassRules = useMemo(() => ({
+    "row-added": (params: any) => params.data?._status === "added",
+    "row-deleted": (params: any) => params.data?._status === "deleted",
+    "row-modified": (params: any) => params.data?._status === "modified",
+    "row-duplicate-key": (params: any) => !!params.data?._hasDuplicateKey,
+    "row-active-diff": (params: any) => params.data?._rowRef === activeRowRef,
+  }), [activeRowRef]);
+
+  useEffect(() => {
+    gridRef.current?.api?.redrawRows();
+  }, [activeRowRef, rowData]);
 
   const scrollToRowRef = useCallback((rowRef: string) => {
     const api = gridRef.current?.api;
@@ -327,7 +328,7 @@ const DiffGrid = forwardRef<DiffGridHandle, DiffGridProps>(function DiffGrid({ s
         ref={gridRef}
         columnDefs={columnDefs} rowData={rowData}
         getRowId={(params) => params.data._rowRef}
-        getRowClass={getRowClass}
+        rowClassRules={rowClassRules}
         onCellValueChanged={handleCellValueChanged}
         onCellContextMenu={handleCellContextMenu}
         onColumnResized={handleColumnResized}

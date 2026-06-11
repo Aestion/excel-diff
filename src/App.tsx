@@ -6,6 +6,8 @@ import DiffView from "./components/DiffView";
 import HistoryBar from "./components/HistoryBar";
 import WorkspaceTabs from "./components/WorkspaceTabs";
 import { useWorkspaceStore } from "./stores/workspaceStore";
+import { getStartupExternalDiffRequest, listenExternalDiffOpen, type ExternalDiffRequest } from "./api/tauri";
+import { openExternalDiff } from "./utils/externalDiffLauncher";
 
 function App() {
   const { currentView, setView, oldDir, newDir } = useDiffStore();
@@ -25,6 +27,35 @@ function App() {
     const right = nameOf(newDir);
     setFileListTitle(left || right ? `${left || "Left"} vs ${right || "Right"}` : "Directory Compare");
   }, [newDir, oldDir, setFileListTitle]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    const handleRequest = async (request: ExternalDiffRequest) => {
+      try {
+        await openExternalDiff(request);
+      } catch (e: any) {
+        alert(`Open external diff failed: ${e?.message || String(e)}`);
+      }
+    };
+
+    void getStartupExternalDiffRequest().then((request) => {
+      if (!disposed && request) void handleRequest(request);
+    });
+
+    void listenExternalDiffOpen((request) => {
+      if (!disposed) void handleRequest(request);
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   return (
     <div className="h-screen flex flex-col bg-gray-50 text-gray-900 select-none">

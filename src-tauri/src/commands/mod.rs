@@ -4,7 +4,7 @@ use crate::vcs;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::command;
 
 #[derive(serde::Serialize)]
@@ -12,6 +12,149 @@ use tauri::command;
 pub struct FileHash {
     pub path: String,
     pub hash: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalDiffRequest {
+    pub source_path: String,
+    pub destination_path: String,
+    pub title: Option<String>,
+    pub fallback_cmd: Option<String>,
+}
+
+fn normalize_external_diff_path(path: &str, cwd: Option<&str>) -> String {
+    let value = path.trim_matches('"');
+    let candidate = Path::new(value);
+    if candidate.is_absolute() {
+        value.to_string()
+    } else if let Some(cwd) = cwd {
+        Path::new(cwd).join(candidate).to_string_lossy().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+pub fn parse_external_diff_args(args: &[String], cwd: Option<&str>) -> Option<ExternalDiffRequest> {
+    let mut start = 1;
+    if args.get(1).map(|arg| arg.eq_ignore_ascii_case("diff")).unwrap_or(false) {
+        start = 2;
+    }
+
+    let mut source_path: Option<String> = None;
+    let mut destination_path: Option<String> = None;
+    let mut title: Option<String> = None;
+    let mut fallback_cmd: Option<String> = None;
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = start;
+
+    while i < args.len() {
+        let arg = &args[i];
+        match arg.as_str() {
+            "-s" | "--src" | "--src-path" | "--source" | "--source-path" | "--local" => {
+                if let Some(value) = args.get(i + 1) {
+                    source_path = Some(value.clone());
+                    i += 2;
+                    continue;
+                }
+            }
+            "-d" | "--dst" | "--dst-path" | "--dest" | "--destination" | "--destination-path" | "--remote" => {
+                if let Some(value) = args.get(i + 1) {
+                    destination_path = Some(value.clone());
+                    i += 2;
+                    continue;
+                }
+            }
+            "-t" | "--title" | "--name" => {
+                if let Some(value) = args.get(i + 1) {
+                    title = Some(value.clone());
+                    i += 2;
+                    continue;
+                }
+            }
+            "-c" | "--external-cmd" | "--fallback" | "--fallback-cmd" => {
+                if let Some(value) = args.get(i + 1) {
+                    fallback_cmd = Some(value.clone());
+                    i += 2;
+                    continue;
+                }
+            }
+            "-i" | "-w" | "-v" | "-k" | "--immediately-execute-external-cmd" | "--wait-external-cmd" | "--validate-extension" | "--keep-file-history" => {
+                i += 1;
+                continue;
+            }
+            "--" => {
+                positional.extend(args.iter().skip(i + 1).cloned());
+                break;
+            }
+            _ if arg.starts_with('-') => {
+                i += 1;
+                continue;
+            }
+            _ => positional.push(arg.clone()),
+        }
+        i += 1;
+    }
+
+    if source_path.is_none() && positional.len() >= 2 {
+        source_path = positional.get(0).cloned();
+        destination_path = positional.get(1).cloned();
+    } else if destination_path.is_none() && !positional.is_empty() {
+        destination_path = positional.get(0).cloned();
+    }
+
+    let source_path = source_path?;
+    let destination_path = destination_path?;
+    Some(ExternalDiffRequest {
+        source_path: normalize_external_diff_path(&source_path, cwd),
+        destination_path: normalize_external_diff_path(&destination_path, cwd),
+        title,
+        fallback_cmd,
+    })
+}
+
+fn copy_external_diff_file(path: &str, dir: &Path, name: &str) -> Result<String, String> {
+    let source = Path::new(path);
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{}", value))
+        .unwrap_or_default();
+    let target = dir.join(format!("{}{}", name, extension));
+    fs::copy(source, &target)
+        .map_err(|e| format!("Failed to copy external diff file '{}': {}", path, e))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+pub fn materialize_external_diff_request(
+    request: &ExternalDiffRequest,
+) -> Result<ExternalDiffRequest, String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir()
+        .join("excel-diff")
+        .join("external-diff")
+        .join(timestamp.to_string());
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create external diff temp dir '{}': {}", dir.display(), e))?;
+
+    Ok(ExternalDiffRequest {
+        source_path: copy_external_diff_file(&request.source_path, &dir, "source")?,
+        destination_path: copy_external_diff_file(&request.destination_path, &dir, "destination")?,
+        title: request.title.clone(),
+        fallback_cmd: request.fallback_cmd.clone(),
+    })
+}
+
+#[command]
+pub fn get_startup_external_diff_request() -> Option<ExternalDiffRequest> {
+    let args: Vec<String> = std::env::args().collect();
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|path| path.to_string_lossy().to_string());
+    parse_external_diff_args(&args, cwd.as_deref())
 }
 
 fn collect_excel_files(
@@ -289,4 +432,59 @@ pub fn export_vcs_file_revision(path: String, revision: String) -> Result<String
 #[command]
 pub fn cleanup_old_vcs_temp_exports(max_age_hours: Option<u64>) -> Result<(), String> {
     vcs::cleanup_old_temp_exports(max_age_hours.unwrap_or(24))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_external_diff_args;
+
+    #[test]
+    fn parses_excelmerge_style_diff_args() {
+        let args = vec![
+            "ExcelDiff.exe".to_string(),
+            "diff".to_string(),
+            "-s".to_string(),
+            "old.xlsx".to_string(),
+            "-d".to_string(),
+            "new.xlsx".to_string(),
+            "-c".to_string(),
+            "WinMerge".to_string(),
+            "-i".to_string(),
+            "-w".to_string(),
+            "-v".to_string(),
+            "-k".to_string(),
+        ];
+
+        let request = parse_external_diff_args(&args, Some("C:\\repo")).unwrap();
+        assert!(request.source_path.ends_with("old.xlsx"));
+        assert!(request.destination_path.ends_with("new.xlsx"));
+        assert_eq!(request.fallback_cmd.as_deref(), Some("WinMerge"));
+    }
+
+    #[test]
+    fn parses_positional_diff_args() {
+        let args = vec![
+            "ExcelDiff.exe".to_string(),
+            "diff".to_string(),
+            "C:\\tmp\\old.xlsx".to_string(),
+            "C:\\tmp\\new.xlsx".to_string(),
+        ];
+
+        let request = parse_external_diff_args(&args, None).unwrap();
+        assert_eq!(request.source_path, "C:\\tmp\\old.xlsx");
+        assert_eq!(request.destination_path, "C:\\tmp\\new.xlsx");
+    }
+
+    #[test]
+    fn parses_direct_two_path_args() {
+        let args = vec![
+            "ExcelDiff.exe".to_string(),
+            "old.xlsx".to_string(),
+            "new.xlsx".to_string(),
+        ];
+
+        let request = parse_external_diff_args(&args, Some("C:\\repo")).unwrap();
+        assert!(request.source_path.ends_with("old.xlsx"));
+        assert!(request.destination_path.ends_with("new.xlsx"));
+    }
 }

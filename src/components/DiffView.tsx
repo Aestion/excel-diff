@@ -15,7 +15,7 @@ import { writeExcel, writeExcelChanges, listExcelFiles, readExcel, pickSavePath,
 import type { CellValue, Row, SheetData, CellData, ParsedWorkbook } from "../types/excel";
 import type { DiffResult, DiffRow } from "../types/diff";
 import type { VcsFileInfo } from "../types/vcs";
-import { BackIcon, UndoIcon, RedoIcon, SaveIcon, ArrowRight, ArrowLeft, FilterIcon, KeyIcon, ChevronDown, FileIcon, ChevronDown as ChevronDownIcon, SearchIcon } from "./Icons";
+import { BackIcon, UndoIcon, RedoIcon, SaveIcon, FilterIcon, KeyIcon, ChevronDown, FileIcon, ChevronDown as ChevronDownIcon, SearchIcon } from "./Icons";
 
 function getDiffRowRef(row: DiffRow): string {
   return `${row.oldRowNumber ?? ""}:${row.newRowNumber ?? ""}:${row.viewIndex}`;
@@ -685,6 +685,22 @@ export default function DiffView() {
     [diffBlocks, diffResult]
   );
 
+  useEffect(() => {
+    if (activeDiffRowRef && findDiffBlockIndexByRef(activeDiffRowRef) < 0) {
+      setActiveDiffRowRef(null);
+    }
+  }, [activeDiffRowRef, findDiffBlockIndexByRef]);
+
+  const handleLeftSelectionChanged = useCallback((rowRefs: string[]) => {
+    setLeftSelected(rowRefs);
+    setActiveDiffRowRef(null);
+  }, []);
+
+  const handleRightSelectionChanged = useCallback((rowRefs: string[]) => {
+    setRightSelected(rowRefs);
+    setActiveDiffRowRef(null);
+  }, []);
+
   const scrollBothGridsToRowRef = useCallback((rowRef: string) => {
     window.requestAnimationFrame(() => {
       oldGridRef.current?.scrollToRowRef(rowRef);
@@ -1053,6 +1069,7 @@ export default function DiffView() {
     } else {
       handleCopyRightToLeft(rowRefs);
     }
+    setActiveDiffRowRef(null);
     setRowContextMenu(null);
   }, [handleCopyLeftToRight, handleCopyRightToLeft, leftSelected, rightSelected, rowContextMenu]);
 
@@ -1497,7 +1514,7 @@ export default function DiffView() {
   const hasVerticalOverflow = estimatedScrollHeight > visibleHeight + 2;
   const overviewHeightPx = Math.max(96, Math.min(visibleHeight || 360, overviewRowCount * 8 + 34));
   const overviewStyle = hasVerticalOverflow
-    ? { bottom: 8 }
+    ? { height: "100%" }
     : { height: overviewHeightPx };
   const viewportRatio = estimatedScrollHeight > 0
     ? Math.min(1, visibleHeight / estimatedScrollHeight)
@@ -1529,14 +1546,34 @@ export default function DiffView() {
       };
     });
   })() : [];
-  const leftToRightRefs = selectedRowRefs.filter((rowRef) => {
-    const row = findDiffRowByRef(diffResult, rowRef);
-    return !!row && row.status !== "unchanged";
-  });
-  const rightToLeftRefs = selectedRowRefs.filter((rowRef) => {
-    const row = findDiffRowByRef(diffResult, rowRef);
-    return !!row && row.status !== "unchanged";
-  });
+  const diffOverview = diffBlockCount > 0 ? (
+    <div
+      className="relative w-4 overflow-hidden rounded border border-gray-300 bg-gray-100/90 shadow-sm"
+      style={overviewStyle}
+      title={`${diffBlockCount} 个差异块`}
+    >
+      <div
+        className="pointer-events-none absolute left-0.5 right-0.5 rounded-sm bg-slate-500/30 z-30"
+        style={{ top: overviewViewportTop, height: overviewViewportHeight }}
+      />
+      {diffBlocks.map((block, index) => {
+        const top = `${(block.startIndex / overviewRowCount) * 100}%`;
+        const height = `${Math.max(((block.endIndex - block.startIndex + 1) / overviewRowCount) * 100, 1.4)}%`;
+        const isActive = index === activeDiffBlockIndex;
+        return (
+          <button
+            key={block.id}
+            type="button"
+            aria-label={`跳转到差异块 ${index + 1}`}
+            title={`差异块 ${index + 1}: 行 ${block.startIndex + 1}-${block.endIndex + 1}`}
+            onClick={() => jumpToDiffBlock(block)}
+            className={`absolute left-0 right-0 rounded-sm z-20 ${isActive ? "bg-red-700 ring-1 ring-red-900" : "bg-red-500 hover:bg-red-600"}`}
+            style={{ top, height }}
+          />
+        );
+      })}
+    </div>
+  ) : null;
 
   return (
     <div className="flex-1 flex flex-col h-full">
@@ -1698,7 +1735,7 @@ export default function DiffView() {
       <div className="flex-1 flex overflow-hidden relative">
         <div className="flex-1 border-r">
           <DiffGrid ref={oldGridRef} side="old" diffResult={diffResult} columns={oldSheet?.columns ?? []}
-            onCellEdit={selectedFilePair.oldReadOnly ? undefined : handleLeftCellEdit} onSelectionChanged={setLeftSelected} filter={filter}
+            onCellEdit={selectedFilePair.oldReadOnly ? undefined : handleLeftCellEdit} onSelectionChanged={handleLeftSelectionChanged} filter={filter}
             onScroll={handleGridScroll}
             columnWidths={columnWidths} onColumnWidthsChange={setColumnWidths}
             searchText={activeSearchText} searchMatches={activeSearchMatches} currentMatchIndex={currentMatchIndex}
@@ -1715,26 +1752,14 @@ export default function DiffView() {
           >
             版本对比
           </button>
-          <div className="flex flex-1 flex-col items-center justify-center gap-1.5">
-            <button onClick={() => handleCopyLeftToRight(leftToRightRefs)} disabled={leftToRightRefs.length === 0}
-              className="flex items-center gap-0.5 text-[10px] px-1.5 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-30"
-              title="复制到右侧">
-              <ArrowRight size={11} /> 复制
-            </button>
-            <span className="text-[10px] text-gray-400">{leftToRightRefs.length || 0} 行</span>
-            <div className="w-10 border-t" />
-            <button onClick={() => handleCopyRightToLeft(rightToLeftRefs)} disabled={rightToLeftRefs.length === 0}
-              className="flex items-center gap-0.5 text-[10px] px-1.5 py-1 bg-purple-500 text-white rounded hover:bg-purple-600 disabled:opacity-30"
-              title="复制到左侧">
-              <ArrowLeft size={11} /> 复制
-            </button>
-            <span className="text-[10px] text-gray-400">{rightToLeftRefs.length || 0} 行</span>
+          <div className="flex min-h-0 flex-1 items-center justify-center py-1">
+            {diffOverview}
           </div>
         </div>
 
         <div className="flex-1">
           <DiffGrid ref={newGridRef} side="new" diffResult={diffResult} columns={newSheet?.columns ?? []}
-            onCellEdit={handleCellEdit} onSelectionChanged={setRightSelected} filter={filter}
+            onCellEdit={handleCellEdit} onSelectionChanged={handleRightSelectionChanged} filter={filter}
             onScroll={handleGridScroll} onScrollMetrics={handleScrollMetrics}
             columnWidths={columnWidths} onColumnWidthsChange={setColumnWidths}
             searchText={activeSearchText} searchMatches={activeSearchMatches} currentMatchIndex={currentMatchIndex}
@@ -1756,36 +1781,6 @@ export default function DiffView() {
             >
               复制到对侧
             </button>
-          </div>
-        )}
-
-
-        {diffBlockCount > 0 && (
-          <div
-            className="absolute right-2 top-2 w-4 overflow-hidden rounded border border-gray-300 bg-gray-100/90 shadow-sm z-20"
-            style={overviewStyle}
-            title={`${diffBlockCount} 个差异块`}
-          >
-            <div
-              className="pointer-events-none absolute left-0.5 right-0.5 rounded-sm bg-slate-500/30 z-30"
-              style={{ top: overviewViewportTop, height: overviewViewportHeight }}
-            />
-            {diffBlocks.map((block, index) => {
-              const top = `${(block.startIndex / overviewRowCount) * 100}%`;
-              const height = `${Math.max(((block.endIndex - block.startIndex + 1) / overviewRowCount) * 100, 1.4)}%`;
-              const isActive = index === activeDiffBlockIndex;
-              return (
-                <button
-                  key={block.id}
-                  type="button"
-                  aria-label={`跳转到差异块 ${index + 1}`}
-                  title={`差异块 ${index + 1}: 行 ${block.startIndex + 1}-${block.endIndex + 1}`}
-                  onClick={() => jumpToDiffBlock(block)}
-                  className={`absolute left-0 right-0 rounded-sm z-20 ${isActive ? "bg-red-700 ring-1 ring-red-900" : "bg-red-500 hover:bg-red-600"}`}
-                  style={{ top, height }}
-                />
-              );
-            })}
           </div>
         )}
       </div>

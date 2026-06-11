@@ -1,9 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import type { FileEntry, ParsedWorkbook, SheetData } from "../types/excel";
 import type { VcsCommitSummary, VcsFileInfo } from "../types/vcs";
 import * as mock from "./mockTauri";
+
+export interface ExternalDiffRequest {
+  sourcePath: string;
+  destinationPath: string;
+  title?: string | null;
+  fallbackCmd?: string | null;
+}
 
 async function tryReal<T>(realFn: () => Promise<T>, mockFn: () => Promise<T>): Promise<T> {
   try {
@@ -178,5 +186,21 @@ export async function cleanupOldVcsTempExports(maxAgeHours = 24): Promise<void> 
   return tryReal(
     () => invoke("cleanup_old_vcs_temp_exports", { maxAgeHours }),
     () => mock.cleanupOldVcsTempExports(maxAgeHours)
+  );
+}
+
+export async function getStartupExternalDiffRequest(): Promise<ExternalDiffRequest | null> {
+  return tryReal(
+    () => invoke("get_startup_external_diff_request"),
+    () => Promise.resolve(null)
+  );
+}
+
+export async function listenExternalDiffOpen(
+  handler: (request: ExternalDiffRequest) => void
+): Promise<() => void> {
+  return tryReal(
+    () => listen<ExternalDiffRequest>("external-diff-open", (event) => handler(event.payload)),
+    () => Promise.resolve(() => undefined)
   );
 }

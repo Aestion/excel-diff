@@ -122,6 +122,7 @@ npm run tauri build
 - 新增工作区页签栏，支持右键菜单关闭/关闭其他/关闭同组。
 - 切换对比页签时自动保存和恢复对比视图状态。
 - 关闭含未保存修改的页签时增加确认提示。
+- 新增 Git/SVN 外部 diff tool 支持，可从 `git difftool`、SVN CLI、TortoiseSVN 直接拉起 Excel Diff 的 DiffView 窗口。
 
 ### v1.0.1
 
@@ -130,6 +131,35 @@ npm run tauri build
 - 改进文本规范化与重复键处理，减少换行符差异和重复关键列导致的误判。
 
 ## 使用方法
+
+### 作为 Git/SVN 外部对比工具
+
+Excel Diff 支持被 Git/SVN 作为外部 diff tool 调起，直接打开两个版本文件的 DiffView：
+
+```powershell
+ExcelDiff.exe diff -s "old.xlsx" -d "new.xlsx" --title "Localization_Heat.xlsx"
+```
+
+也支持更宽松的参数形式：
+
+```powershell
+ExcelDiff.exe diff "old.xlsx" "new.xlsx"
+ExcelDiff.exe "old.xlsx" "new.xlsx"
+```
+
+一键配置 Git/SVN：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\configure-vcs-diff.ps1 -ExePath "C:\Program Files\Excel Diff\ExcelDiff.exe"
+```
+
+还原配置：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\restore-vcs-diff.ps1
+```
+
+配置脚本会创建 Git difftool `ExcelDiff`、Git alias `git exceldiff`，配置 SVN CLI 的 `diff-cmd`，并把 TortoiseSVN 的 Excel/CSV 扩展 DiffTools 指向 Excel Diff。TortoiseSVN 右键菜单项仍显示为 `Diff` / `Diff with previous version`，点击这些菜单时会拉起 Excel Diff。原配置会备份到 `%APPDATA%\ExcelDiff\vcs-config-backup.json`，SVN 原始配置会单独备份为 `%APPDATA%\ExcelDiff\svn-config.bak`。更完整的 Git/SVN/TortoiseSVN 配置说明见 [docs/VCS_DIFF_TOOL.md](docs/VCS_DIFF_TOOL.md)。
 
 ### 基本流程
 
@@ -198,7 +228,8 @@ excel-diff/
 │   ├── utils/
 │   │   ├── diffEngine.ts         # 差异对比算法
 │   │   ├── diffTabSnapshot.ts    # 对比页签状态快照
-│   │   └── diffTabUiStateBridge.ts # 对比页签 UI 状态桥接
+│   │   ├── diffTabUiStateBridge.ts # 对比页签 UI 状态桥接
+│   │   └── externalDiffLauncher.ts # Git/SVN 外部 diff tool 调用
 │   ├── types/                    # TypeScript 类型定义
 │   └── api/
 │       └── tauri.ts              # Tauri IPC 接口
@@ -213,6 +244,11 @@ excel-diff/
 │   ├── read_excel.py             # Python Excel 读取（备用）
 │   ├── write_excel.py            # Python Excel 写入
 │   └── Cargo.toml                # Rust 依赖
+├── scripts/                      # Git/SVN 配置脚本
+│   ├── configure-vcs-diff.ps1    # 一键配置外部 diff tool
+│   └── restore-vcs-diff.ps1      # 还原配置
+├── docs/                         # 文档
+│   └── VCS_DIFF_TOOL.md          # Git/SVN/TortoiseSVN 配置说明
 └── package.json
 ```
 
