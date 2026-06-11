@@ -15,7 +15,7 @@
 - **单元格编辑** — 直接在对比界面修改数据，支持撤销/重做
 - **导出报告** — 导出差异报告为 CSV 文件
 
-### 多页式工作区（v1.0.3）
+### 多页式工作区（v1.0.4）
 - **多标签页** — 目录对比页和文件对比页作为独立标签页存在，可自由切换
 - **智能附着** — 文件对比页自动插入到来源目录页签后面，方便管理
 - **单独关闭** — 每个页签可单独关闭，关闭对比页不影响其他页签
@@ -73,8 +73,8 @@
 
 从 [Releases](https://github.com/Aestion/excel-diff/releases) 下载最新版本：
 
-- `Excel Diff_1.0.3_x64-setup.exe` — NSIS 安装包（推荐）
-- `Excel Diff_1.0.3_x64_en-US.msi` — MSI 安装包
+- `Excel Diff_1.0.4_x64-setup.exe` — NSIS 安装包（推荐）
+- `Excel Diff_1.0.4_x64_en-US.msi` — MSI 安装包
 
 ### 从源码构建
 
@@ -116,13 +116,18 @@ npm run tauri build
 
 ## 更新日志
 
+### v1.0.4
+
+- 新增 Git/SVN 外部 diff tool 支持，可从 `git difftool`、SVN CLI、TortoiseSVN 直接拉起 Excel Diff 的 DiffView 窗口。
+- 新增 `configure-vcs-diff.ps1` 和 `restore-vcs-diff.ps1` 一键配置/还原脚本。
+- 改进差异引擎和对比视图交互。
+
 ### v1.0.3
 
 - **多页式工作区** — 目录对比和文件对比改为独立标签页，支持多标签并行查看和单独关闭。
 - 新增工作区页签栏，支持右键菜单关闭/关闭其他/关闭同组。
 - 切换对比页签时自动保存和恢复对比视图状态。
 - 关闭含未保存修改的页签时增加确认提示。
-- 新增 Git/SVN 外部 diff tool 支持，可从 `git difftool`、SVN CLI、TortoiseSVN 直接拉起 Excel Diff 的 DiffView 窗口。
 
 ### v1.0.1
 
@@ -343,8 +348,8 @@ npm run tauri build
 
 构建成功后会生成：
 
-- NSIS：`src-tauri/target/release/bundle/nsis/Excel Diff_1.0.3_x64-setup.exe`
-- MSI：`src-tauri/target/release/bundle/msi/Excel Diff_1.0.3_x64_en-US.msi`
+- NSIS：`src-tauri/target/release/bundle/nsis/Excel Diff_1.0.4_x64-setup.exe`
+- MSI：`src-tauri/target/release/bundle/msi/Excel Diff_1.0.4_x64_en-US.msi`
 
 如果在 Git Bash/VSCode 终端里构建时误用了 `C:\Program Files\Git\usr\bin\link.exe`，请在 Visual Studio Developer Command Prompt 中构建，或确保 MSVC 的 `link.exe` 位于 PATH 前面。
 
