@@ -17,7 +17,7 @@ ExcelDiff.exe "old.xlsx" "new.xlsx"
 
 Supported file extensions: `.xlsx`, `.xlsm`, `.xlsb`, `.xls`, `.csv`, `.tsv`.
 
-When Excel Diff is already running, a second launch opens a new diff tab in the existing window. The second process copies VCS temporary files into an Excel Diff temp folder before notifying the existing window, so Git/SVN can clean up their own temp files safely.
+For VCS integrations, each external diff launch opens its own Excel Diff window. This avoids TortoiseGit/TortoiseSVN temporary-file lifetime issues when several comparisons are opened from Explorer or log windows.
 
 ## One-Step Configuration
 
@@ -34,6 +34,7 @@ The script:
 - configures `git exceldiff`
 - configures SVN CLI `diff-cmd`
 - configures TortoiseSVN DiffTools for Excel/CSV extensions and common Excel MIME types
+- configures TortoiseGit DiffTools for Excel/CSV extensions and common Excel MIME types
 - suppresses the extra TortoiseMerge window for `svn:mime-type` property-only diffs
 - writes a backup to `%APPDATA%\ExcelDiff\vcs-config-backup.json`
 - writes the previous SVN config file to `%APPDATA%\ExcelDiff\svn-config.bak`
@@ -48,14 +49,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\restore-vcs-diff.ps1
 Optional flags:
 
 ```powershell
-# Configure only Git.
+# Do not configure SVN CLI.
 powershell -ExecutionPolicy Bypass -File .\scripts\configure-vcs-diff.ps1 -SkipSvn
 
-# Configure only SVN CLI.
+# Do not configure Git CLI.
 powershell -ExecutionPolicy Bypass -File .\scripts\configure-vcs-diff.ps1 -SkipGit
 
 # Do not configure TortoiseSVN.
 powershell -ExecutionPolicy Bypass -File .\scripts\configure-vcs-diff.ps1 -SkipTortoiseSvn
+
+# Do not configure TortoiseGit.
+powershell -ExecutionPolicy Bypass -File .\scripts\configure-vcs-diff.ps1 -SkipTortoiseGit
 
 # Use local Git config instead of global Git config.
 powershell -ExecutionPolicy Bypass -File .\scripts\configure-vcs-diff.ps1 -GitScope local
@@ -74,14 +78,14 @@ Equivalent `.gitconfig`:
     trustExitCode = false
 
 [alias]
-    exceldiff = difftool -g -y -t ExcelDiff
+    exceldiff = difftool -y -t ExcelDiff
 ```
 
 Usage:
 
 ```powershell
 git exceldiff path/to/file.xlsx
-git difftool -g -y -t ExcelDiff HEAD~1 HEAD -- path/to/file.xlsx
+git difftool -y -t ExcelDiff HEAD~1 HEAD -- path/to/file.xlsx
 ```
 
 To make Git treat Excel files as binary and prefer difftool viewing, add to `.gitattributes`:
@@ -120,7 +124,7 @@ TortoiseSVN only shows the direct `Diff` menu item for files with local working-
 Configured command:
 
 ```text
-"C:\Program Files\Excel Diff\ExcelDiff.exe" diff -s "%base" -d "%mine" --title "%bname"
+wscript.exe "%APPDATA%\ExcelDiff\tools\excel-diff-tortoise.js" "%base" "%mine" "%bname"
 ```
 
 Manual configuration path: TortoiseSVN -> Settings -> External Programs -> Diff Viewer -> Advanced. Add the same command for `.xlsx`, `.xlsm`, `.xlsb`, and `.xls`.
@@ -128,6 +132,20 @@ Manual configuration path: TortoiseSVN -> Settings -> External Programs -> Diff 
 Some repositories store Excel files with `svn:mime-type=application/octet-stream`. For those files, add the same command for `application/octet-stream` as well. The script does this automatically.
 
 When comparing from the log window, TortoiseSVN may also try to show versioned property changes such as `svn:mime-type`. The script maps `svn:mime-type` to a no-op wrapper so the content comparison opens in Excel Diff without an extra TortoiseMerge property window.
+
+## TortoiseGit
+
+The configuration script also writes values under `HKCU\Software\TortoiseGit\DiffTools`. TortoiseGit's Explorer menu uses this registry location instead of Git's `difftool.ExcelDiff.cmd` setting.
+
+Configured command:
+
+```text
+wscript.exe "%APPDATA%\ExcelDiff\tools\excel-diff-tortoise.js" "%base" "%mine" "%bname"
+```
+
+If TortoiseGit still opens its built-in Excel diff after configuration, restart `TGitCache.exe` or restart Explorer so the shell extension reloads the DiffTools registry values.
+
+## Manual Fallback
 
 If your TortoiseSVN dialog uses a different variable set, configure it with the two file path variables it provides for base/working or old/new files. Excel Diff accepts both named and positional arguments, so this also works:
 

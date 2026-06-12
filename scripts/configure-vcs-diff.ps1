@@ -4,7 +4,8 @@ param(
   [string]$GitScope = "global",
   [switch]$SkipGit,
   [switch]$SkipSvn,
-  [switch]$SkipTortoiseSvn
+  [switch]$SkipTortoiseSvn,
+  [switch]$SkipTortoiseGit
 )
 
 $ErrorActionPreference = "Stop"
@@ -165,8 +166,8 @@ function Convert-JsonObjectToHashtable {
 }
 
 function Get-TortoiseDiffToolValue {
-  param([string]$Extension)
-  $path = "HKCU:\Software\TortoiseSVN\DiffTools"
+  param([string]$Root, [string]$Extension)
+  $path = "HKCU:\Software\$Root\DiffTools"
   $item = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
   if ($null -eq $item) {
     return $null
@@ -179,8 +180,8 @@ function Get-TortoiseDiffToolValue {
 }
 
 function Set-TortoiseDiffToolValue {
-  param([string]$Extension, [string]$Value)
-  $path = "HKCU:\Software\TortoiseSVN\DiffTools"
+  param([string]$Root, [string]$Extension, [string]$Value)
+  $path = "HKCU:\Software\$Root\DiffTools"
   if (!(Test-Path -Path $path)) {
     New-Item -Path $path -Force | Out-Null
   }
@@ -188,8 +189,8 @@ function Set-TortoiseDiffToolValue {
 }
 
 $exe = Resolve-ExcelDiffExe $ExePath
-if ($SkipGit -and $SkipSvn -and $SkipTortoiseSvn) {
-  Write-Host "Nothing to configure because -SkipGit, -SkipSvn, and -SkipTortoiseSvn were all set."
+if ($SkipGit -and $SkipSvn -and $SkipTortoiseSvn -and $SkipTortoiseGit) {
+  Write-Host "Nothing to configure because -SkipGit, -SkipSvn, -SkipTortoiseSvn, and -SkipTortoiseGit were all set."
   Write-Host "Executable: $exe"
   exit 0
 }
@@ -346,6 +347,7 @@ $backup = [ordered]@{
   git = $null
   svn = $null
   tortoiseSvn = $null
+  tortoiseGit = $null
 }
 
 $existingBackup = Read-Backup $backupPath
@@ -356,6 +358,7 @@ if ($existingBackup) {
   if ($existingBackup.git) { $backup.git = $existingBackup.git }
   if ($existingBackup.svn) { $backup.svn = $existingBackup.svn }
   if ($existingBackup.tortoiseSvn) { $backup.tortoiseSvn = $existingBackup.tortoiseSvn }
+  if ($existingBackup.tortoiseGit) { $backup.tortoiseGit = $existingBackup.tortoiseGit }
 }
 
 if (!$SkipGit -and $null -eq $backup.git) {
@@ -402,9 +405,33 @@ if (!$SkipTortoiseSvn -and $null -eq $backup.tortoiseSvn) {
   )
   $values = [ordered]@{}
   foreach ($extension in $extensions) {
-    $values[$extension] = Get-TortoiseDiffToolValue $extension
+    $values[$extension] = Get-TortoiseDiffToolValue "TortoiseSVN" $extension
   }
   $backup.tortoiseSvn = [ordered]@{
+    diffTools = $values
+  }
+}
+
+if (!$SkipTortoiseGit -and $null -eq $backup.tortoiseGit) {
+  $extensions = @(
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+    ".csv",
+    ".tsv",
+    "application/octet-stream",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel.sheet.macroEnabled.12",
+    "text/csv",
+    "text/tab-separated-values"
+  )
+  $values = [ordered]@{}
+  foreach ($extension in $extensions) {
+    $values[$extension] = Get-TortoiseDiffToolValue "TortoiseGit" $extension
+  }
+  $backup.tortoiseGit = [ordered]@{
     diffTools = $values
   }
 }
@@ -419,7 +446,7 @@ if (!$SkipGit) {
   Set-GitValue "diff.tool" "ExcelDiff" $GitScope
   Set-GitValue "difftool.ExcelDiff.cmd" $gitCmd $GitScope
   Set-GitValue "difftool.ExcelDiff.trustExitCode" "false" $GitScope
-  Set-GitValue "alias.exceldiff" "difftool -g -y -t ExcelDiff" $GitScope
+  Set-GitValue "alias.exceldiff" "difftool -y -t ExcelDiff" $GitScope
 }
 
 if (!$SkipSvn) {
@@ -442,9 +469,29 @@ if (!$SkipTortoiseSvn) {
     "text/csv",
     "text/tab-separated-values"
   )) {
-    Set-TortoiseDiffToolValue $extension $tortoiseCommand
+    Set-TortoiseDiffToolValue "TortoiseSVN" $extension $tortoiseCommand
   }
-  Set-TortoiseDiffToolValue "svn:mime-type" "wscript.exe `"$noopWrapper`""
+  Set-TortoiseDiffToolValue "TortoiseSVN" "svn:mime-type" "wscript.exe `"$noopWrapper`""
+}
+
+if (!$SkipTortoiseGit) {
+  $tortoiseCommand = "wscript.exe `"$tortoiseWrapper`" `"%base`" `"%mine`" `"%bname`""
+  foreach ($extension in @(
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+    ".csv",
+    ".tsv",
+    "application/octet-stream",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel.sheet.macroEnabled.12",
+    "text/csv",
+    "text/tab-separated-values"
+  )) {
+    Set-TortoiseDiffToolValue "TortoiseGit" $extension $tortoiseCommand
+  }
 }
 
 Write-Host "Excel Diff VCS integration configured."
@@ -458,4 +505,7 @@ if (!$SkipSvn) {
 }
 if (!$SkipTortoiseSvn) {
   Write-Host "TortoiseSVN DiffTools configured for Excel/CSV extensions and MIME types"
+}
+if (!$SkipTortoiseGit) {
+  Write-Host "TortoiseGit DiffTools configured for Excel/CSV extensions and MIME types"
 }

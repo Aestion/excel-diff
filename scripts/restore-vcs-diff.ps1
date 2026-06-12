@@ -23,8 +23,8 @@ function Set-Or-Unset-GitValue {
 }
 
 function Set-Or-Remove-TortoiseDiffToolValue {
-  param([string]$Extension, [AllowNull()][string]$Value)
-  $path = "HKCU:\Software\TortoiseSVN\DiffTools"
+  param([string]$Root, [string]$Extension, [AllowNull()][string]$Value)
+  $path = "HKCU:\Software\$Root\DiffTools"
   if ($null -eq $Value -or $Value -eq "") {
     if (Test-Path -Path $path) {
       Remove-ItemProperty -Path $path -Name $Extension -ErrorAction SilentlyContinue
@@ -71,9 +71,16 @@ if ($backup.svn) {
 
 if ($backup.tortoiseSvn -and $backup.tortoiseSvn.diffTools) {
   foreach ($property in $backup.tortoiseSvn.diffTools.PSObject.Properties) {
-    Set-Or-Remove-TortoiseDiffToolValue $property.Name $property.Value
+    Set-Or-Remove-TortoiseDiffToolValue "TortoiseSVN" $property.Name $property.Value
   }
   Write-Host "TortoiseSVN DiffTools restored."
+}
+
+if ($backup.tortoiseGit -and $backup.tortoiseGit.diffTools) {
+  foreach ($property in $backup.tortoiseGit.diffTools.PSObject.Properties) {
+    Set-Or-Remove-TortoiseDiffToolValue "TortoiseGit" $property.Name $property.Value
+  }
+  Write-Host "TortoiseGit DiffTools restored."
 }
 
 Write-Host "Excel Diff VCS integration restored from: $BackupPath"

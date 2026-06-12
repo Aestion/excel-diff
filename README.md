@@ -15,7 +15,7 @@
 - **单元格编辑** — 直接在对比界面修改数据，支持撤销/重做
 - **导出报告** — 导出差异报告为 CSV 文件
 
-### 多页式工作区（v1.0.4）
+### 多页式工作区（v1.0.5）
 - **多标签页** — 目录对比页和文件对比页作为独立标签页存在，可自由切换
 - **智能附着** — 文件对比页自动插入到来源目录页签后面，方便管理
 - **单独关闭** — 每个页签可单独关闭，关闭对比页不影响其他页签
@@ -73,8 +73,8 @@
 
 从 [Releases](https://github.com/Aestion/excel-diff/releases) 下载最新版本：
 
-- `Excel Diff_1.0.4_x64-setup.exe` — NSIS 安装包（推荐）
-- `Excel Diff_1.0.4_x64_en-US.msi` — MSI 安装包
+- `Excel Diff_1.0.5_x64-setup.exe` — NSIS 安装包（推荐）
+- `Excel Diff_1.0.5_x64_en-US.msi` — MSI 安装包
 
 ### 从源码构建
 
@@ -116,6 +116,11 @@ npm run tauri build
 
 ## 更新日志
 
+### v1.0.5
+
+- 完善 Git/SVN/TortoiseGit/TortoiseSVN 外部 diff tool 配置文档和脚本。
+- 优化 VCS diff 启动参数处理和安装目录识别。
+
 ### v1.0.4
 
 - 新增 Git/SVN 外部 diff tool 支持，可从 `git difftool`、SVN CLI、TortoiseSVN 直接拉起 Excel Diff 的 DiffView 窗口。
@@ -139,7 +144,7 @@ npm run tauri build
 
 ### 作为 Git/SVN 外部对比工具
 
-Excel Diff 支持被 Git/SVN 作为外部 diff tool 调起，直接打开两个版本文件的 DiffView：
+Excel Diff 支持被 Git、SVN、TortoiseGit、TortoiseSVN 作为外部 diff tool 调起，直接打开两个版本文件的 DiffView：
 
 ```powershell
 ExcelDiff.exe diff -s "old.xlsx" -d "new.xlsx" --title "Localization_Heat.xlsx"
@@ -158,13 +163,28 @@ ExcelDiff.exe "old.xlsx" "new.xlsx"
 powershell -ExecutionPolicy Bypass -File .\scripts\configure-vcs-diff.ps1 -ExePath "C:\Program Files\Excel Diff\ExcelDiff.exe"
 ```
 
+如果传入的是安装目录，脚本会自动查找目录内的 `ExcelDiff.exe`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\configure-vcs-diff.ps1 -ExePath "E:\Excel-diff\Excel Diff"
+```
+
 还原配置：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\restore-vcs-diff.ps1
 ```
 
-配置脚本会创建 Git difftool `ExcelDiff`、Git alias `git exceldiff`，配置 SVN CLI 的 `diff-cmd`，并把 TortoiseSVN 的 Excel/CSV 扩展 DiffTools 指向 Excel Diff。TortoiseSVN 右键菜单项仍显示为 `Diff` / `Diff with previous version`，点击这些菜单时会拉起 Excel Diff。原配置会备份到 `%APPDATA%\ExcelDiff\vcs-config-backup.json`，SVN 原始配置会单独备份为 `%APPDATA%\ExcelDiff\svn-config.bak`。更完整的 Git/SVN/TortoiseSVN 配置说明见 [docs/VCS_DIFF_TOOL.md](docs/VCS_DIFF_TOOL.md)。
+脚本会配置四类入口：
+
+- Git CLI：创建 `difftool.ExcelDiff` 和 `git exceldiff`
+- SVN CLI：配置 `%APPDATA%\Subversion\config` 的 `diff-cmd`
+- TortoiseGit：配置 `HKCU\Software\TortoiseGit\DiffTools`
+- TortoiseSVN：配置 `HKCU\Software\TortoiseSVN\DiffTools`
+
+TortoiseGit/TortoiseSVN 的右键菜单仍显示为原来的 `Diff`、`Diff with previous version` 等名称；点击这些菜单时会按扩展名或 MIME 类型拉起 Excel Diff。脚本也会把 `svn:mime-type` 属性差异映射到 no-op，避免 Show Log 对比时额外弹出 TortoiseMerge 属性窗口。
+
+原配置会备份到 `%APPDATA%\ExcelDiff\vcs-config-backup.json`，SVN 原始配置会单独备份为 `%APPDATA%\ExcelDiff\svn-config.bak`。包装脚本日志位于 `%APPDATA%\ExcelDiff\logs\vcs-diff.log`。更完整的 Git/SVN/TortoiseGit/TortoiseSVN 配置说明见 [docs/VCS_DIFF_TOOL.md](docs/VCS_DIFF_TOOL.md)。
 
 ### 基本流程
 
@@ -348,8 +368,8 @@ npm run tauri build
 
 构建成功后会生成：
 
-- NSIS：`src-tauri/target/release/bundle/nsis/Excel Diff_1.0.4_x64-setup.exe`
-- MSI：`src-tauri/target/release/bundle/msi/Excel Diff_1.0.4_x64_en-US.msi`
+- NSIS：`src-tauri/target/release/bundle/nsis/Excel Diff_1.0.5_x64-setup.exe`
+- MSI：`src-tauri/target/release/bundle/msi/Excel Diff_1.0.5_x64_en-US.msi`
 
 如果在 Git Bash/VSCode 终端里构建时误用了 `C:\Program Files\Git\usr\bin\link.exe`，请在 Visual Studio Developer Command Prompt 中构建，或确保 MSVC 的 `link.exe` 位于 PATH 前面。
 
